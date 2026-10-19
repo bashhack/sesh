@@ -419,6 +419,9 @@ func (f *fakeVault) Save(c *Change) (vault.Key, error) {
 			if c.URL != nil {
 				f.entries[i].URL = *c.URL
 			}
+			if c.MFADevice != nil {
+				f.entries[i].Settings.AWSMFADevice = *c.MFADevice
+			}
 			if c.Secret != nil {
 				delete(f.secrets, c.Key)
 				f.secrets[c.To] = string(c.Secret)
@@ -3571,5 +3574,57 @@ func TestFileVersionNotCopied(t *testing.T) {
 	a.press("enter")
 	if s := a.screen(); len(a.copied) != 0 || !strings.Contains(s, "Version 2 of cert is a binary file") {
 		t.Errorf("copied %q:\n%s", a.copied, s)
+	}
+}
+
+// An AWS profile's entry shows its MFA device, which its form changes or
+// takes out; another TOTP entry's form has no such input.
+func TestAWSMFADevice(t *testing.T) {
+	const was, now = "arn:aws:iam::123456789012:mfa/me", "arn:aws:iam::123456789012:mfa/new"
+	f := newFake()
+	awsKey := vault.AWSKey("work")
+	f.entries = append([]vault.Entry{{Key: awsKey, Settings: vault.Settings{AWSMFADevice: was}}}, f.entries...)
+	f.secrets[awsKey] = seed
+	a := newApp(t, f, Options{})
+	// The ARN wraps in the pane: its end is on a line of its own.
+	if s := a.screen(); !strings.Contains(s, "MFA device  arn:aws:iam::") || !strings.Contains(s, "fa/me") {
+		t.Fatalf("the details:\n%s", s)
+	}
+	setDevice := func(to string) {
+		t.Helper()
+		a.press("ctrl+k", "e")
+		i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.label == "MFA device" })
+		if i < 0 || !a.form.inputs[i].visible() || a.form.inputs[i].value() != f.entries[0].Settings.AWSMFADevice {
+			t.Fatalf("the form's MFA device input (%d):\n%s", i, a.screen())
+		}
+		a.form.focusInput(i)
+		a.press("ctrl+u", to, "ctrl+s")
+	}
+	setDevice(now)
+	if c := f.saves[len(f.saves)-1]; c.MFADevice == nil || *c.MFADevice != now {
+		t.Fatalf("change = %+v", c)
+	}
+	if s := a.screen(); !strings.Contains(s, "fa/new") {
+		t.Errorf("after the change:\n%s", s)
+	}
+	setDevice("")
+	if c := f.saves[len(f.saves)-1]; c.MFADevice == nil || *c.MFADevice != "" {
+		t.Fatalf("taken out: change = %+v", c)
+	}
+	if s := a.screen(); strings.Contains(s, "MFA device") {
+		t.Errorf("a device taken out is still shown:\n%s", s)
+	}
+	// Saved as it is, the device isn't given.
+	a.press("ctrl+k", "e", "ctrl+s")
+	if c := f.saves[len(f.saves)-1]; c.MFADevice != nil {
+		t.Errorf("unchanged: change = %+v", c)
+	}
+	// Another TOTP entry: none.
+	a.press("down", "down", "ctrl+k", "e")
+	if a.form == nil || a.form.title != "Edit "+entryName(&vault.Entry{Key: code}) {
+		t.Fatalf("not the TOTP entry's form:\n%s", a.screen())
+	}
+	if s := a.screen(); strings.Contains(s, "MFA device") {
+		t.Errorf("another TOTP entry's form has the input:\n%s", s)
 	}
 }

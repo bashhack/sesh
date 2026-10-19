@@ -1114,3 +1114,33 @@ func TestUIReadQRImage(t *testing.T) {
 		t.Errorf("a relative path: %v", err)
 	}
 }
+
+// An AWS profile's entry's MFA device, saved from the app: added with the
+// entry, changed, and refused when it isn't an authenticator app's ARN.
+func TestUI_SaveMFADevice(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	k := vault.AWSKey("work")
+	device := func(arn string) *string { return &arn }
+	const first, second = "arn:aws:iam::123456789012:mfa/me", "arn:aws:iam::123456789012:mfa/laptop"
+	if _, err := u.Save(&tui.Change{To: k, Secret: []byte("JBSWY3DPEHPK3PXP"), MFADevice: device(first)}); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := store.Lookup(k); err != nil || e.Settings.AWSMFADevice != first {
+		t.Fatalf("added: %+v, %v", e.Settings, err)
+	}
+	if _, err := u.Save(&tui.Change{Key: k, To: k, MFADevice: device("arn:aws:iam::123456789012:u2f/key")}); err == nil || !strings.Contains(err.Error(), "authenticator app's ARN") {
+		t.Errorf("a security key's ARN: %v", err)
+	}
+	if _, err := u.Save(&tui.Change{Key: k, To: k, MFADevice: device(second)}); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := store.Lookup(k); err != nil || e.Settings.AWSMFADevice != second {
+		t.Errorf("changed: %+v, %v", e.Settings, err)
+	}
+}

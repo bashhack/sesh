@@ -211,7 +211,7 @@ func TestSync_BothWays(t *testing.T) {
 		t.Errorf("laptop has %q", laptop.secret(gh))
 	}
 	to := vault.Key{Kind: vault.KindPassword, Service: "github-work", Username: "alice"}
-	if _, err := laptop.store.Edit(gh, database.EntryEdit{To: &to}); err != nil {
+	if _, err := laptop.store.Edit(gh, &database.EntryEdit{To: &to}); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, f, laptop, desktop)

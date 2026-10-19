@@ -37,7 +37,10 @@ type EntryEdit struct {
 	TOTP    *totp.Params
 	// FileName is a file entry's new file name, with its new content.
 	FileName *string
-	Secret   []byte
+	// AWSMFADevice is an AWS profile's entry's new MFA device (its ARN),
+	// "" for none.
+	AWSMFADevice *string
+	Secret       []byte
 }
 
 // Edit changes the entry at k as e says, in one transaction. Its secret and
@@ -49,14 +52,15 @@ type EntryEdit struct {
 // update time moves only with a new secret. A new key another entry has is
 // ErrNameTaken; the entry changed meanwhile is ErrEntryChanged. It returns
 // the change, in words, as the audit event records it.
-func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
+func (s *Store) Edit(k vault.Key, given *EntryEdit) (string, error) {
+	e := *given
 	if e.To != nil && *e.To == k {
 		e.To = nil
 	}
 	if e.Details != nil && e.Details.IsZero() {
 		e.Details = nil
 	}
-	filing := e.Folder != nil || e.Tags != nil || e.TOTP != nil || e.FileName != nil
+	filing := e.Folder != nil || e.Tags != nil || e.TOTP != nil || e.FileName != nil || e.AWSMFADevice != nil
 	if e.To == nil && e.Secret == nil && e.Details == nil && !filing {
 		return "", ErrNothingToChange
 	}
@@ -252,8 +256,8 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	return detail, nil
 }
 
-// fileInTx sets the folder, tags, code settings and file name e names on
-// row id, the entry k, and says what changed.
+// fileInTx sets the folder, tags, code settings, file name and MFA device
+// e names on row id, the entry k, and says what changed.
 func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, err error) {
 	if e.Folder != nil {
 		moved, err := rowsChanged(tx.Exec(`UPDATE entries SET folder = ? WHERE id = ? AND folder <> ?`, *e.Folder, id, *e.Folder))
@@ -291,48 +295,58 @@ func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, e
 		}
 	}
 	if e.TOTP != nil {
-		var col sql.NullString
-		if err := tx.QueryRow(`SELECT settings FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+		if err := setSetting(tx, id, k, &what, "code settings changed", func(st *vault.Settings) bool {
+			was := st.TOTP
+			st.TOTP = *e.TOTP
+			return was != st.TOTP
+		}); err != nil {
 			return nil, err
-		}
-		settings, err := decodeSettings(k, col)
-		if err != nil {
-			return nil, err
-		}
-		if settings.TOTP != *e.TOTP {
-			settings.TOTP = *e.TOTP
-			enc, err := encodeSettings(&settings)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := tx.Exec(`UPDATE entries SET settings = ? WHERE id = ?`, enc, id); err != nil {
-				return nil, err
-			}
-			what = append(what, "code settings changed")
 		}
 	}
 	if e.FileName != nil {
-		var col sql.NullString
-		if err := tx.QueryRow(`SELECT settings FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+		if err := setSetting(tx, id, k, &what, "file name changed", func(st *vault.Settings) bool {
+			was := st.FileName
+			st.FileName = *e.FileName
+			return was != st.FileName
+		}); err != nil {
 			return nil, err
 		}
-		settings, err := decodeSettings(k, col)
-		if err != nil {
+	}
+	if e.AWSMFADevice != nil {
+		if err := setSetting(tx, id, k, &what, "MFA device changed", func(st *vault.Settings) bool {
+			was := st.AWSMFADevice
+			st.AWSMFADevice = *e.AWSMFADevice
+			return was != st.AWSMFADevice
+		}); err != nil {
 			return nil, err
-		}
-		if settings.FileName != *e.FileName {
-			settings.FileName = *e.FileName
-			enc, err := encodeSettings(&settings)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := tx.Exec(`UPDATE entries SET settings = ? WHERE id = ?`, enc, id); err != nil {
-				return nil, err
-			}
-			what = append(what, "file name changed")
 		}
 	}
 	return what, nil
+}
+
+// setSetting changes row id's settings, the entry k's, as change does,
+// and when it says that's a change, writes them and adds said to what.
+func setSetting(tx *sql.Tx, id int64, k vault.Key, what *[]string, said string, change func(*vault.Settings) bool) error {
+	var col sql.NullString
+	if err := tx.QueryRow(`SELECT settings FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+		return err
+	}
+	settings, err := decodeSettings(k, col)
+	if err != nil {
+		return err
+	}
+	if !change(&settings) {
+		return nil
+	}
+	enc, err := encodeSettings(&settings)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE entries SET settings = ? WHERE id = ?`, enc, id); err != nil {
+		return err
+	}
+	*what = append(*what, said)
+	return nil
 }
 
 // resealSecret is the secret for to: secret when given, or k's sealed

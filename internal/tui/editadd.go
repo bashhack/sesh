@@ -165,6 +165,12 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the current key; a key alone gives 6-digit codes every 30s"
 	}
 
+	// An AWS profile's entry (totp/aws/<profile>) names the MFA device
+	// sesh aws sends its codes for.
+	device := m.textInput("MFA device", e.Settings.AWSMFADevice)
+	device.hint = "the authenticator app's ARN in AWS (arn:aws:iam::ACCOUNT:mfa/NAME); empty: sesh asks AWS for the profile's"
+	device.shown = func() bool { return kind() == vault.KindTOTP && name.value() == vault.AWSKey("").Service }
+
 	url := m.textInput("URL", e.URL)
 	folder := m.textInput("folder", e.Folder)
 	tags := m.textInput("tags", strings.Join(e.Tags, ", "))
@@ -195,7 +201,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	fileIn.shown = func() bool { return kind() == vault.KindFile && m.opts.ReadFile != nil }
 
 	title := "Edit " + entryName(e)
-	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, fileIn, url, folder, tags, text, fields})
+	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, device, fileIn, url, folder, tags, text, fields})
 	switch {
 	case adding:
 		title = "Add an entry"
@@ -238,6 +244,9 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 		if fo := folder.value(); adding && fo != "" || !adding && fo != orig.Folder {
 			c.Folder = &fo
+		}
+		if d := device.value(); device.visible() && (adding && d != "" || !adding && d != orig.Settings.AWSMFADevice) {
+			c.MFADevice = &d
 		}
 		var tagList []string
 		for t := range strings.SplitSeq(tags.value(), ",") {

@@ -148,7 +148,7 @@ func TestSync_ForgottenReusedElsewhere(t *testing.T) {
 			desktop.put("github", "pw-desktop")
 			// The third computer, not synced since pw-old was forgotten,
 			// changes something else.
-			if _, err := third.store.Edit(gh, database.EntryEdit{Tags: &[]string{"work"}}); err != nil {
+			if _, err := third.store.Edit(gh, &database.EntryEdit{Tags: &[]string{"work"}}); err != nil {
 				t.Fatal(err)
 			}
 			settleN(t, f, 8, inOrder(cs, order)...)
@@ -177,7 +177,7 @@ func TestSync_ForgottenReusedBeforeTaken(t *testing.T) {
 			// history, and uses it again.
 			desktop.put("github", "pw-old")
 			desktop.put("github", "pw-new")
-			if _, err := third.store.Edit(gh, database.EntryEdit{Tags: &[]string{"work"}}); err != nil {
+			if _, err := third.store.Edit(gh, &database.EntryEdit{Tags: &[]string{"work"}}); err != nil {
 				t.Fatal(err)
 			}
 			settleN(t, f, 8, inOrder(cs, order)...)

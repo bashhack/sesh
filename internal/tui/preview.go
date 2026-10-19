@@ -262,6 +262,13 @@ func (m *Model) previewLines(w, h int) []string {
 	}
 	// The labels line up, as wide as the longest, up to a third of the pane.
 	labelWidth := len("password")
+	device := ""
+	if e.Kind == vault.KindTOTP && e.Service == vault.AWSKey("").Service {
+		device = e.Settings.AWSMFADevice
+	}
+	if device != "" {
+		labelWidth = len("MFA device")
+	}
 	for _, f := range e.Fields {
 		labelWidth = max(labelWidth, ansi.StringWidth(f.Name))
 	}
@@ -328,6 +335,7 @@ func (m *Model) previewLines(w, h int) []string {
 		}
 	}
 	field("user", e.Username, plain)
+	field("MFA device", device, plain)
 	field("url", e.URL, plain)
 	for _, f := range e.Fields {
 		switch {

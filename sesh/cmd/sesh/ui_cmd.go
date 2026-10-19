@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/health"
@@ -747,6 +748,9 @@ func (u *uiVault) wrote(err error) error {
 // Save adds an entry, or changes one, as the app's form describes it.
 func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
 	to, secret := c.To, c.Secret
+	if c.MFADevice != nil && *c.MFADevice != "" && !aws.IsVirtualMFADevice(*c.MFADevice) {
+		return vault.Key{}, errors.New("that isn't an authenticator app's ARN (arn:aws:iam::ACCOUNT:mfa/NAME): it's shown on the user's Security credentials page in AWS, under MFA")
+	}
 	var params *totp.Params
 	if to.Kind == vault.KindTOTP && len(secret) > 0 {
 		key, p, err := readTOTPKey(secret)
@@ -768,7 +772,7 @@ func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
 		}
 		params = &totp.Params{Issuer: cur.Settings.TOTP.Issuer}
 	}
-	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params, FileName: c.FileName}
+	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params, FileName: c.FileName, AWSMFADevice: c.MFADevice}
 	if to != c.Key {
 		edit.To = &to
 	}
@@ -786,7 +790,7 @@ func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
 		}
 	}
 	// One transaction: a part refused leaves the entry as it was.
-	switch _, err := u.store.Edit(c.Key, edit); {
+	switch _, err := u.store.Edit(c.Key, &edit); {
 	case err == nil, errors.Is(err, database.ErrNothingToChange):
 		return to, u.wrote(nil)
 	case errors.Is(err, database.ErrNameTaken):
@@ -813,6 +817,9 @@ func (u *uiVault) add(c *tui.Change, secret []byte, params *totp.Params) error {
 	}
 	if c.FileName != nil {
 		ent.Settings.FileName = *c.FileName
+	}
+	if c.MFADevice != nil {
+		ent.Settings.AWSMFADevice = *c.MFADevice
 	}
 	d := vault.Details{Notes: c.Notes, Fields: c.SetFields}
 	if c.URL != nil {

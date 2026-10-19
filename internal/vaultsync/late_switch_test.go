@@ -188,7 +188,7 @@ func TestSync_LateSwitchEditOverAForgery(t *testing.T) {
 	})
 	desktop.sync(f)
 	notes := "my notes"
-	if _, err := desktop.store.Edit(gh, database.EntryEdit{Details: &vault.DetailsChange{SetNotes: true, Notes: []byte(notes)}}); err != nil {
+	if _, err := desktop.store.Edit(gh, &database.EntryEdit{Details: &vault.DetailsChange{SetNotes: true, Notes: []byte(notes)}}); err != nil {
 		t.Fatal(err)
 	}
 	desktop.sync(f)
@@ -219,7 +219,7 @@ func TestSync_LateSwitchOwnEditsKept(t *testing.T) {
 		laptop, desktop, f, gh, rec, _, _ := lateWorld(t)
 		desktop.put("github", "desk-2")
 		change := vault.DetailsChange{SetNotes: true, Notes: []byte("my notes"), Set: []vault.Field{{Name: "recovery", Value: []byte("codes-123"), Secret: true}}}
-		if _, err := desktop.store.Edit(gh, database.EntryEdit{Details: &change}); err != nil {
+		if _, err := desktop.store.Edit(gh, &database.EntryEdit{Details: &change}); err != nil {
 			t.Fatal(err)
 		}
 		if sent {
@@ -328,7 +328,7 @@ func TestSync_LateSwitchDeletedElsewhere(t *testing.T) {
 		r.Versions = r.Versions.Join(syncfolder.Versions{"0123456789abcdef": 1})
 	})
 	desktop.sync(f)
-	if _, err := desktop.store.Edit(gh, database.EntryEdit{Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
+	if _, err := desktop.store.Edit(gh, &database.EntryEdit{Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
 		t.Fatal(err)
 	}
 	desktop.sync(f)
@@ -538,7 +538,7 @@ func TestSync_LateSwitchMadeThenChanged(t *testing.T) {
 	bank := desktop.put("bank", "b-1")
 	desktop.sync(f)
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank2", Username: "alice"}
-	if _, err := desktop.store.Edit(bank, database.EntryEdit{To: &to, Secret: []byte("b-2")}); err != nil {
+	if _, err := desktop.store.Edit(bank, &database.EntryEdit{To: &to, Secret: []byte("b-2")}); err != nil {
 		t.Fatal(err)
 	}
 	desktop.sync(f)
@@ -635,7 +635,7 @@ func TestSync_LateSwitchEditTakenByAnotherLate(t *testing.T) {
 	gh := cs[0].put("github", "pw-1")
 	settleN(t, f, 4, cs...)
 	notes := vault.DetailsChange{SetNotes: true, Notes: []byte("desk notes")}
-	if _, err := cs[1].store.Edit(gh, database.EntryEdit{Details: &notes}); err != nil {
+	if _, err := cs[1].store.Edit(gh, &database.EntryEdit{Details: &notes}); err != nil {
 		t.Fatal(err)
 	}
 	cs[1].sync(f)
@@ -717,7 +717,7 @@ func TestSync_LateSwitchTypedThenForged(t *testing.T) {
 	uid := liveUID(t, desktop, gh)
 	forge(t, desktop, f, uid, oldKey, oldID, func(*syncfolder.Record) {})
 	url := "https://github.com"
-	if _, err := desktop.store.Edit(gh, database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{URL: &url}}); err != nil {
+	if _, err := desktop.store.Edit(gh, &database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{URL: &url}}); err != nil {
 		t.Fatal(err)
 	}
 	if s := desktop.sync(f); len(s.Sent) != 1 {
@@ -759,7 +759,7 @@ func TestSync_LateSwitchMadeHereChangedThere(t *testing.T) {
 	cs[1].sync(f)
 	cs[2].sync(f)
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank-c", Username: "alice"}
-	if _, err := cs[2].store.Edit(bank, database.EntryEdit{To: &to, Secret: []byte("c-2")}); err != nil {
+	if _, err := cs[2].store.Edit(bank, &database.EntryEdit{To: &to, Secret: []byte("c-2")}); err != nil {
 		t.Fatal(err)
 	}
 	cs[2].sync(f)
@@ -790,7 +790,7 @@ func TestSync_LateSwitchNotesOnBoth(t *testing.T) {
 	cs[1].sync(f)
 	for i, c := range []*computer{cs[1], cs[2]} {
 		n := vault.DetailsChange{SetNotes: true, Notes: []byte([]string{"from desk", "from third"}[i])}
-		if _, err := c.store.Edit(bank, database.EntryEdit{Details: &n}); err != nil {
+		if _, err := c.store.Edit(bank, &database.EntryEdit{Details: &n}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -821,7 +821,7 @@ func TestSync_TypedGoneWithTheVaults(t *testing.T) {
 		gh := laptop.put("github", "pw-1")
 		settle(t, f, laptop, desktop)
 		uid := liveUID(t, desktop, gh)
-		if _, err := desktop.store.Edit(gh, database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
+		if _, err := desktop.store.Edit(gh, &database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
 			t.Fatal(err)
 		}
 		laptop.put("github", "pw-3")
@@ -869,7 +869,7 @@ func TestSync_TypedGoneWithoutASync(t *testing.T) {
 		gh := laptop.put("github", "pw-1")
 		settle(t, f, laptop, desktop)
 		uid := liveUID(t, desktop, gh)
-		if _, err := desktop.store.Edit(gh, database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
+		if _, err := desktop.store.Edit(gh, &database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
 			t.Fatal(err)
 		}
 		desktop.sync(f)
@@ -913,7 +913,7 @@ func TestSync_LateSwitchMadeHereSecretGone(t *testing.T) {
 	bank := cs[1].put("bank", "b-1")
 	cs[1].sync(f)
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank2", Username: "alice"}
-	if _, err := cs[1].store.Edit(bank, database.EntryEdit{To: &to}); err != nil {
+	if _, err := cs[1].store.Edit(bank, &database.EntryEdit{To: &to}); err != nil {
 		t.Fatal(err)
 	}
 	cs[1].sync(f)

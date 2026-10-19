@@ -265,7 +265,7 @@ func runEdit(app *App, args []string) error {
 		}
 		e.Details = change
 	}
-	detail, err := store.Edit(from, e)
+	detail, err := store.Edit(from, &e)
 	if err != nil {
 		if errors.Is(err, database.ErrNothingToChange) {
 			if e.Secret != nil {

@@ -78,11 +78,11 @@ func TestHistory_EditAndRename(t *testing.T) {
 	if err := s.Put(k, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Edit(k, EntryEdit{Secret: []byte("two")}); err != nil {
+	if _, err := s.Edit(k, &EntryEdit{Secret: []byte("two")}); err != nil {
 		t.Fatal(err)
 	}
 	to := vault.Key{Kind: vault.KindPassword, Service: "gh", Username: "alice"}
-	if _, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("three")}); err != nil {
+	if _, err := s.Edit(k, &EntryEdit{To: &to, Secret: []byte("three")}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(versions(t, s, to), " "); got != "two one" {
@@ -235,7 +235,7 @@ func TestHistory_StoreOverDamagedEntry(t *testing.T) {
 	if err := s.Put(k, []byte("two")); err != nil {
 		t.Fatalf("store over a damaged entry: %v", err)
 	}
-	if _, err := s.Edit(k, EntryEdit{Secret: []byte("three")}); err != nil {
+	if _, err := s.Edit(k, &EntryEdit{Secret: []byte("three")}); err != nil {
 		t.Fatalf("edit after: %v", err)
 	}
 	if got := strings.Join(versions(t, s, k), " "); got != "two" {
@@ -331,7 +331,7 @@ func TestHistory_DamagedVersionStopsRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}
-	if _, err := s.Edit(k, EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "version 3") || !strings.Contains(err.Error(), "sesh history password/bank --forget 3") {
+	if _, err := s.Edit(k, &EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "version 3") || !strings.Contains(err.Error(), "sesh history password/bank --forget 3") {
 		t.Errorf("rename = %v", err)
 	}
 }

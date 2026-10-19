@@ -133,7 +133,7 @@ func TestSync_NameSwap(t *testing.T) {
 	tmp := vault.Key{Kind: vault.KindPassword, Service: "tmp", Username: "alice"}
 	for _, e := range [][2]vault.Key{{ka, tmp}, {kb, ka}, {tmp, kb}} {
 		to := e[1]
-		if _, err := desktop.store.Edit(e[0], database.EntryEdit{To: &to}); err != nil {
+		if _, err := desktop.store.Edit(e[0], &database.EntryEdit{To: &to}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -172,11 +172,11 @@ func TestSync_FreedNameWaits(t *testing.T) {
 	highUID := uidOfKey(t, laptop, high)
 	kc := vault.Key{Kind: vault.KindPassword, Service: "c", Username: "alice"}
 	// laptop: high moves off its name to c, low takes high's name.
-	if _, err := laptop.store.Edit(high, database.EntryEdit{To: &kc}); err != nil {
+	if _, err := laptop.store.Edit(high, &database.EntryEdit{To: &kc}); err != nil {
 		t.Fatal(err)
 	}
 	to := high
-	if _, err := laptop.store.Edit(low, database.EntryEdit{To: &to}); err != nil {
+	if _, err := laptop.store.Edit(low, &database.EntryEdit{To: &to}); err != nil {
 		t.Fatal(err)
 	}
 	syncLoose(laptop, f)
