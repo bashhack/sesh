@@ -181,6 +181,9 @@ func (s *shownEntry) text(reveal bool) string {
 	case tags != "":
 		rows = append(rows, row{"Tags", tags})
 	}
+	if d := s.e.Settings.AWSMFADevice; d != "" {
+		rows = append(rows, row{"MFA device", shownText(d)})
+	}
 	// A file entry's file is named, and its content is the secret.
 	label := secretLabel(s.e.Kind)
 	if s.e.Kind == vault.KindFile {
@@ -280,6 +283,7 @@ func (s *shownEntry) writeJSON(app *App, reveal bool) error {
 		Notes     *string   `json:"notes,omitempty"`
 		Encoding  string    `json:"encoding,omitempty"`
 		FileName  string    `json:"file_name,omitempty"`
+		MFADevice string    `json:"aws_mfa_device,omitempty"`
 		ID        string    `json:"id"`
 		Kind      string    `json:"kind"`
 		Service   string    `json:"service"`
@@ -293,7 +297,7 @@ func (s *shownEntry) writeJSON(app *App, reveal bool) error {
 	}{
 		ID: s.e.Key.String(), Kind: string(s.e.Kind), Service: s.e.Service, Username: s.e.Username,
 		URL: s.e.URL, Folder: s.e.Folder, Tags: s.e.Tags, HasNotes: s.e.HasNotes,
-		CreatedAt: s.e.CreatedAt, UpdatedAt: s.e.UpdatedAt,
+		CreatedAt: s.e.CreatedAt, UpdatedAt: s.e.UpdatedAt, MFADevice: s.e.Settings.AWSMFADevice,
 	}
 	if s.e.Kind == vault.KindFile {
 		out.FileName, out.Size = s.e.Settings.FileName, s.e.Size

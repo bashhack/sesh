@@ -15,6 +15,7 @@ import (
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -25,6 +26,7 @@ var readSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.
 type editFlags struct {
 	service, username, kind string
 	from                    string
+	mfaDevice               string
 	details                 provider.DetailsFlags
 	gen                     genFlags
 	secret, generate, force bool
@@ -39,6 +41,7 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	fs.BoolVar(&f.secret, "secret", false, "Type a new secret (a note reads stdin)")
 	fs.BoolVar(&f.generate, "generate", false, "Generate a new password")
 	fs.StringVar(&f.from, "from", "", "A file entry: the file to keep instead")
+	fs.StringVar(&f.mfaDevice, "mfa-device", "", `An AWS profile's MFA entry: its MFA device's ARN ("" takes it out)`)
 	f.gen.register(fs)
 	fs.BoolVar(&f.force, "force", false, "Don't ask before renaming an AWS profile's MFA entry, which sesh aws then won't find")
 	f.details.Register(fs)
@@ -63,6 +66,9 @@ const editUsage = `Usage: sesh edit <entry> [flags]
   sesh edit github --rename-field pin=card-pin   (keeps its value)
   sesh edit github --plain-field account-no      (a secret field made plain, keeping its value)
   sesh edit github --notes [--editor]    (stdin, or $EDITOR; empty removes them)
+  sesh edit totp/aws/work --mfa-device arn:aws:iam::123456789012:mfa/me
+                                         (an AWS profile's MFA entry; "" takes it out,
+                                         and sesh aws asks AWS for the user's)
 
 ` + entryWordsHelp
 
@@ -101,7 +107,7 @@ func runEdit(app *App, args []string) error {
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
-		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --from, --url, --notes, --field, --secret-field, --remove-field, --rename-field, or --plain-field (or run it at a terminal to be asked)")
+		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --from, --url, --notes, --field, --secret-field, --remove-field, --rename-field, --plain-field, or --mfa-device (or run it at a terminal to be asked)")
 	}
 
 	// A new file is read before anything is unlocked.
@@ -121,6 +127,9 @@ func runEdit(app *App, args []string) error {
 			to, err := plannedKey(k, f, set)
 			if err == nil {
 				err = checkEditSecret(k, to, f)
+			}
+			if err == nil {
+				err = checkEditDevice(to, f, set, nil)
 			}
 			if err == nil {
 				_, err = f.details.Change(k.Kind, to.Kind, terminal)
@@ -163,8 +172,18 @@ func runEdit(app *App, args []string) error {
 			return errors.New("without a terminal, only one value can come from stdin: give the new secret, the notes, and each secret field in separate edits")
 		}
 	}
-	if !asked && to == from && !f.secret && !f.generate && f.from == "" && change == nil {
+	if !asked && to == from && !f.secret && !f.generate && f.from == "" && change == nil && !set["mfa-device"] {
 		return errors.New("nothing to change: the entry already has that name and kind")
+	}
+
+	if set["mfa-device"] {
+		current, err := store.Lookup(from)
+		if err != nil {
+			return err
+		}
+		if err := checkEditDevice(to, f, set, &current); err != nil {
+			return err
+		}
 	}
 
 	// What the details change can't do to this entry is refused before
@@ -230,6 +249,9 @@ func runEdit(app *App, args []string) error {
 	if to != from {
 		e.To = &to
 	}
+	if set["mfa-device"] {
+		e.AWSMFADevice = &f.mfaDevice
+	}
 	weak := false
 	if f.from != "" {
 		e.Secret, e.FileName = newFile, &newFileName
@@ -284,6 +306,9 @@ func runEdit(app *App, args []string) error {
 			if f.details.OnlyURL() {
 				return errors.New("nothing to change: the entry already has that URL")
 			}
+			if set["mfa-device"] && change == nil && to == from {
+				return errors.New("nothing to change: the entry already has that MFA device")
+			}
 			return errors.New("nothing to change: the entry already has those details")
 		}
 		if errors.Is(err, database.ErrNameTaken) || errors.Is(err, database.ErrEntryChanged) || errors.Is(err, database.ErrVaultKeyChanged) || errors.Is(err, vault.ErrNotFound) {
@@ -330,6 +355,27 @@ func plannedKey(from vault.Key, f *editFlags, set map[string]bool) (vault.Key, e
 		return vault.Key{}, err
 	}
 	return to, nil
+}
+
+// checkEditDevice refuses --mfa-device that isn't an authenticator app's
+// ARN, or, once the entry is read (current), for one that isn't an AWS
+// profile's MFA entry, totp/aws/<profile>, as it's named after the edit;
+// one that has a device can still have it changed or taken out. Before
+// it's read (current nil) only the ARN is checked, so naming the entry by
+// its ID or by words is refused alike.
+func checkEditDevice(to vault.Key, f *editFlags, set map[string]bool, current *vault.Entry) error {
+	if !set["mfa-device"] {
+		return nil
+	}
+	if f.mfaDevice != "" {
+		if err := setup.CheckDevice(f.mfaDevice, ""); err != nil {
+			return fmt.Errorf("--mfa-device: %w", err)
+		}
+	}
+	if current == nil || to == vault.AWSKey(to.Username) || current.Settings.AWSMFADevice != "" {
+		return nil
+	}
+	return fmt.Errorf("--mfa-device is for an AWS profile's MFA entry, totp/aws/<profile>, which %s isn't", to)
 }
 
 // checkKindChange refuses a change of kind other than among password,

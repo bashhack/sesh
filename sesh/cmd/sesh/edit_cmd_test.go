@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -135,6 +136,7 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 		"password/a --generate --length 0": "--length: password length must be at least 1",
 		"password/a --generate --length 3": "--length: password length 3 is too short for 4 required character sets",
 		"nope":                             "nothing to change",
+		"totp/aws/work --mfa-device arn:aws:iam::123456789012:u2f/key": "--mfa-device: that isn't an authenticator app's ARN",
 	} {
 		if _, _, err := runEditOut(t, "", false, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
@@ -308,5 +310,47 @@ func TestEdit_RenameAndPlainField(t *testing.T) {
 	}
 	if log := mustRun(t, runAudit); !strings.Contains(log, "field pin renamed to card-pin") || !strings.Contains(log, "field card-pin made plain") {
 		t.Errorf("the changes aren't in the audit log:\n%s", log)
+	}
+}
+
+// --mfa-device sets an AWS profile's MFA device, which show prints, and
+// "" takes it out; it's refused for another entry without one, and the
+// one it has already is nothing to change.
+func TestEdit_MFADevice(t *testing.T) {
+	env := editVault(t)
+	populatePasswordStore(t, env, map[string]string{"totp/aws/work": "JBSWY3DPEHPK3PXP", "totp/github/alice": "JBSWY3DPEHPK3PXP"})
+	const arn = "arn:aws:iam::123456789012:mfa/me"
+	if out, _, err := runEditOut(t, "", false, "totp/aws/work", "--mfa-device", arn); err != nil || !strings.Contains(out, "MFA device changed") {
+		t.Fatalf("set: %q, %v", out, err)
+	}
+	if out, err := runShowOut(t, "totp/aws/work"); err != nil || !regexp.MustCompile(`(?m)^  MFA device +`+regexp.QuoteMeta(arn)+`$`).MatchString(out) {
+		t.Errorf("show:\n%s (%v)", out, err)
+	}
+	if out, err := runShowOut(t, "totp/aws/work", "--json"); err != nil || !strings.Contains(out, `"aws_mfa_device": "`+arn+`"`) {
+		t.Errorf("show --json:\n%s (%v)", out, err)
+	}
+	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--mfa-device", arn); err == nil || !strings.Contains(err.Error(), "already has that MFA device") {
+		t.Errorf("the same device: %v", err)
+	}
+	// A TOTP entry that isn't an AWS profile's, without a device: refused
+	// once it's read.
+	if _, _, err := runEditOut(t, "", false, "totp/github/alice", "--mfa-device", arn); err == nil || !strings.Contains(err.Error(), "--mfa-device is for an AWS profile's MFA entry") {
+		t.Errorf("another TOTP entry: %v", err)
+	}
+	// Named by its ID or by words, refused alike.
+	for _, words := range [][]string{{"password/gitlab"}, {"gitlab"}} {
+		if _, _, err := runEditOut(t, "", false, append(words, "--mfa-device", arn)...); err == nil || !strings.Contains(err.Error(), "--mfa-device is for an AWS profile's MFA entry") {
+			t.Errorf("%q: %v", words, err)
+		}
+	}
+	// Renamed away with its device, it can still have it taken out.
+	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--rename", "aws-old", "--force"); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err := runEditOut(t, "", false, "totp/aws-old/work", "--mfa-device", ""); err != nil || !strings.Contains(out, "MFA device changed") {
+		t.Errorf("taken out: %q, %v", out, err)
+	}
+	if out, err := runShowOut(t, "totp/aws-old/work"); err != nil || strings.Contains(out, "MFA device") {
+		t.Errorf("show after it's taken out:\n%s (%v)", out, err)
 	}
 }

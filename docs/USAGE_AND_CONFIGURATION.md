@@ -324,7 +324,7 @@ $ sesh config set clipboard_timeout 15s
 | `sesh copy <entry>` | Copies its password, API key or note, a TOTP entry's current code, or a file entry's text; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
 | `sesh get <entry>` | Prints the same, for a pipe or a script; a file entry's file exactly as kept | `--username`, `--url`, `--field NAME`, as for copy; `--json`; `-o FILE` writes it to a file readable only by you |
 | `sesh code <entry>` | Prints a TOTP entry's current code, and how long it has left | `--json` |
-| `sesh show <entry>` | Shows the entry: its URL, folder, tags, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
+| `sesh show <entry>` | Shows the entry: its URL, folder, tags, an AWS profile's MFA device, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
 | `sesh open <entry>` | Opens its URL in the browser (http and https only) | |
 
 **Changing entries.**
@@ -332,7 +332,7 @@ $ sesh config set clipboard_timeout 15s
 | Command | What it does | Flags |
 |---------|--------------|-------|
 | `sesh add password\|key\|note\|totp\|file [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link; a file entry keeps a file whole | `--from FILE` (a file entry's file, which names it unless a name is given); `--username U`; `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]` (a password or passphrase, copied as it's saved); `--qr` (a TOTP key from a QR code on screen) or `--qr-image FILE` (from one in a PNG or JPEG); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
-| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--from FILE` (a file entry's new file); `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
+| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes, fields, or an AWS profile's MFA device | `--from FILE` (a file entry's new file); `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--mfa-device ARN` (an AWS profile's MFA entry; `""` takes it out), `--force` |
 | `sesh generate` | Prints a new random password, stored nowhere | `--length N` (default 24), `--no-symbols`; or a passphrase: `--words N` (3 to 20), `--separator S` (default `-`), `--capitalize`; `--copy` copies it instead |
 | `sesh trash <entry>…` | Moves entries to the trash; asks first | `--purge` deletes for good; `--force` doesn't ask |
 | `sesh trash list\|restore\|remove\|empty` | The trash: see [The trash](#the-trash) | |
@@ -1026,7 +1026,7 @@ sesh show totp github --uri
 
 `sesh code` takes only TOTP entries, so `sesh code github` doesn't need `totp`. Near the end of a code's time (5 seconds or less), it prints the next code too. `sesh copy` and `sesh get` give a TOTP entry's current code, as they give another entry's secret.
 
-TOTP entries are entries like any other: they're in `sesh list`, `sesh search`, `sesh ui`, and exports. `sesh aws`'s MFA secret for a profile is the TOTP entry `aws` with the profile as its username (`totp/aws/default`), and it remembers the MFA device with it.
+TOTP entries are entries like any other: they're in `sesh list`, `sesh search`, `sesh ui`, and exports. `sesh aws`'s MFA secret for a profile is the TOTP entry `aws` with the profile as its username (`totp/aws/default`), and it remembers the MFA device with it: `sesh show` prints it, and `sesh edit totp/aws/work --mfa-device arn:aws:iam::123456789012:mfa/me` changes it (an authenticator app's ARN; `""` takes it out, and `sesh aws` then asks AWS for the user's device), as `sesh aws setup` sets it.
 
 ### Passwords, API Keys and Notes
 
@@ -1911,12 +1911,12 @@ sesh add --help
 | "AWS refused the code; … Waiting Ns for the next one" | AWS takes each code once; this one was used in the last 30 seconds (`sesh aws` run twice, say) | Nothing: sesh tries the next code itself |
 | "AWS refused the next code too: check this computer's clock …" | AWS refused two codes in a row | Make sure the computer sets its clock automatically, and that the profile's MFA device in AWS is the one this key was set up for; if not, run `sesh aws setup` again |
 | "failed to detect MFA device: AWS lists no authenticator app …" | The entry has no MFA device saved, and AWS lists no authenticator app for the profile's user | Run `sesh aws setup`, adding the device in the AWS console as it says |
-| "failed to detect MFA device: AWS lists N authenticator apps …" | The entry has no MFA device saved, and the user has several, so sesh can't tell which the key is for | Run `sesh aws setup` again and choose the device |
+| "failed to detect MFA device: AWS lists N authenticator apps …" | The entry has no MFA device saved, and the user has several, so sesh can't tell which the key is for | Run `sesh aws setup` again and choose the device, or give it: `sesh edit totp/aws/X --mfa-device ARN` (the ARN is on the user's Security credentials page, under MFA) |
 | "AWS couldn't say who profile X signs in as …" (from `sesh aws setup`) | The AWS CLI can't use the profile; its own message follows | Run the `aws sts get-caller-identity` command it gives, and fix the profile (`aws configure`, or sign in again) |
 | "… signs in as …, a temporary session …", or "… signs in with temporary credentials …" | sesh took the profile for one with access keys, but AWS gave temporary credentials | Check the profile's configuration: `aws configure list --profile …` |
 | "profile X assumes a role (role_arn): the AWS CLI asks for its MFA code itself …" | The profile's credentials come from assuming a role | Use the AWS CLI with the profile; `sesh aws --profile X --clip` copies the code it asks for |
 | "aws login didn't sign profile X in: …" | The browser sign-in was cancelled or failed | Run `sesh aws --profile X` again; or `aws login --profile X` to see the AWS CLI's own messages |
-| "The MFA key is saved, as totp/aws/X, but not which MFA device it's for …" | `sesh aws setup` stopped after saving the key | If the user has one authenticator app in AWS, `sesh aws` works, asking AWS for it; otherwise run `sesh aws setup` again to choose it |
+| "The MFA key is saved, as totp/aws/X, but not which MFA device it's for …" | `sesh aws setup` stopped after saving the key | If the user has one authenticator app in AWS, `sesh aws` works, asking AWS for it; otherwise run `sesh aws setup` again to choose it, or give it: `sesh edit totp/aws/X --mfa-device ARN` |
 | "failed to capture screenshot" | Reading the QR code on screen was cancelled or failed | In `sesh aws setup`, choose another way to read the key; for `sesh add totp`, leave out `--qr` and type the key, or use `--qr-image` |
 | "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Type the key instead, or retake a clearer screenshot |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
