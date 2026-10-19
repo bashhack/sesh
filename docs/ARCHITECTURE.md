@@ -210,7 +210,7 @@ The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` 
 - `vault_key`, the one row an unlock reads before any entry;
 - `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
 - `audit_log`, which names entries by their ID's text, with no foreign key, so the log survives an entry's deletion;
-- what syncing keeps: `sync_state`, `sync_info`, `sync_typed`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
+- what syncing keeps: `sync_state`, `sync_info`, `sync_typed`, `sync_typed_check`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
 - `schema_migrations`.
 
 ```mermaid
@@ -331,8 +331,8 @@ Syncing between computers is three parts, from the bottom up:
   - An entry changed neither here nor there, its agreed version intact, is skipped without decrypting anything. One with a file that can't be read, isn't downloaded yet, or is sealed with another master password's key waits, and nothing is written over it.
   - Otherwise, a change in the folder is taken, one made here is sent, and one made on both is merged against the agreed version.
   - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there (unless it was changed here after the restore).
-  - Of the files sealed with a key from before a master password change, only the one agreed is opened, and sealed again; any other isn't opened, and the entry's file is written over with what was agreed (or removed, for an entry never had here).
-  - After taking a master password change made elsewhere, nothing this computer took under the old key is trusted: each entry is made again from the folder's version under the new key, with only what was typed here made again on it (`syncfolder.Typed`: `Diff` keeps what a push typed, `Rebase` makes it again on another version). A deletion for good in the folder stands. With no version under the new key in the folder, an entry made here is sent, one deleted for good here is forgotten, and any other is held back.
+  - Of the files sealed with a key from before a master password change, only the one agreed is opened, and sealed again; any other isn't opened, and the entry's file is written over with this computer's version (or removed, for an entry never had here).
+  - After taking a master password change made elsewhere, nothing this computer took under the old key is trusted: each entry is made again from the folder's version under the new key, with only what was typed here made again on it (`syncfolder.Typed`: `Diff` keeps what a push typed, `Rebase` makes it again on another version). A deletion for good in the folder stands. With no version under the new key in the folder, an entry made here is sent (unless the vault no longer has a secret typed for it: then it's held back until one is typed again), one deleted for good here is forgotten, and any other is held back.
   - `Options` give it the vault's older keys (to open files sealed before a password change, and seal them again), a deadline, and whether a sync with nothing to do is logged.
   - It returns a `Summary`.
 - **`internal/database`: what the vault keeps.**
