@@ -10,11 +10,15 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/sitematch"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/touchid"
+	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -40,6 +44,14 @@ const (
 type browserRequest struct {
 	Type string `json:"type"`
 	URL  string `json:"url,omitempty"`
+	ID   string `json:"id,omitempty"` // fill's entry
+	// generate's: a passphrase of Words words, or Length characters.
+	Separator  string `json:"separator,omitempty"`
+	Length     int    `json:"length,omitempty"`
+	Words      int    `json:"words,omitempty"`
+	NoSymbols  bool   `json:"no_symbols,omitempty"`
+	Capitalize bool   `json:"capitalize,omitempty"`
+	Passphrase bool   `json:"passphrase,omitempty"`
 }
 
 // browserReply is a reply: Status is "ok", or "error" with Code and
@@ -51,6 +63,11 @@ type browserReply struct {
 	Status  string          `json:"status"`
 	Code    string          `json:"code,omitempty"`
 	Message string          `json:"message,omitempty"`
+	// fill's: the login's username, password, and current TOTP code;
+	// generate's password, in Password.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	TOTP     string `json:"totp,omitempty"`
 }
 
 // browserEntry is a login offered for a site: no secret, only what names
@@ -90,6 +107,10 @@ func runBrowserHost(app *App, _ []string) error {
 
 // refused is the reply saying why err stopped a request.
 func refused(err error) browserReply {
+	if errors.Is(err, tui.ErrLocked) {
+		// The agent locked as the request was answered.
+		err = errLocked
+	}
 	if be, ok := errors.AsType[*browserError](err); ok {
 		return browserReply{Status: "error", Code: be.code, Message: be.message}
 	}
@@ -114,6 +135,12 @@ func answerBrowser(req *browserRequest, reply *browserReply) error {
 			entries = []browserEntry{}
 		}
 		reply.Entries = &entries
+	case "fill":
+		return browserFill(req, reply)
+	case "generate":
+		return browserGenerate(req, reply)
+	case "unlock_touchid":
+		return browserUnlockTouchID(reply)
 	default:
 		return &browserError{"unknown_request", fmt.Sprintf("sesh doesn't know the request %q: the extension may be newer than sesh", req.Type)}
 	}
@@ -151,7 +178,11 @@ func writeBrowserMessage(w io.Writer, v any) error {
 		return fmt.Errorf("the reply is %d bytes, more than the browser takes (%d)", len(body), maxBrowserReply)
 	}
 	msg := binary.NativeEndian.AppendUint32(make([]byte, 0, 4+len(body)), uint32(len(body))) //nolint:gosec // at most maxBrowserReply
-	_, err = w.Write(append(msg, body...))
+	msg = append(msg, body...)
+	_, err = w.Write(msg)
+	// A fill's reply holds a password: these copies of it go, at least.
+	secure.SecureZeroBytes(body)
+	secure.SecureZeroBytes(msg)
 	return err
 }
 
@@ -259,4 +290,160 @@ func entryURLs(e *vault.Entry) []string {
 		}
 	}
 	return urls
+}
+
+// errLocked is a request that needs the vault unlocked, refused while it
+// isn't: the browser's sesh never asks for the master password.
+var errLocked = &browserError{"locked", "sesh is locked: unlock it with Touch ID, or run any sesh command (or sesh ui) to unlock it"}
+
+// openUnlocked opens the vault through the agent, when it's running and
+// holds this vault's key, as this build: never asking for the master
+// password, never reading SESH_MASTER_PASSWORD, and never starting an
+// agent. The caller closes the store.
+func openUnlocked() (*database.Store, error) {
+	cfg, err := settings()
+	if err != nil {
+		return nil, err
+	}
+	dbPath := cfg.DBPath.Value
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if errors.Is(err, database.ErrNoVault) {
+		return nil, noVault(dbPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		return nil, errLocked
+	}
+	id := database.UnlockID(mat.Verify)
+	if st, err := agent.Status(conn); err != nil || !agentUnlocks(&st, true, id) {
+		closeAgentConn(conn)
+		return nil, errLocked
+	}
+	store, err := openStoreWith(dbPath, agent.NewOracle(conn, id))
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	return store, nil
+}
+
+// browserFill gives the login req.ID names, for the tab at req.URL: its
+// username, password, and current TOTP code when a TOTP entry with its
+// name and username has one. The site is checked again here, whatever the
+// extension found: one site's password is never given for another's
+// page. Each secret read is recorded in the audit log, naming the site.
+func browserFill(req *browserRequest, reply *browserReply) error {
+	scheme, host, ok := sitematch.Of(req.URL)
+	if !ok {
+		return &browserError{"not_a_site", "sesh fills logins on http and https pages only"}
+	}
+	k, err := vault.ParseKey(req.ID)
+	if err != nil || k.Kind != vault.KindPassword && k.Kind != vault.KindAPIKey {
+		return &browserError{"bad_request", fmt.Sprintf("%q isn't a login sesh fills: a password or API key entry's ID", req.ID)}
+	}
+	store, err := openUnlocked()
+	if err != nil {
+		return err
+	}
+	defer closeAuditStore(store)
+	e, err := store.Lookup(k)
+	if errors.Is(err, vault.ErrNotFound) {
+		return &browserError{"not_found", fmt.Sprintf("sesh has no %s now", k)}
+	}
+	if err != nil {
+		return uiLocked(err)
+	}
+	if !slices.ContainsFunc(entryURLs(&e), func(u string) bool { return sitematch.Matches(u, scheme, host) }) {
+		return &browserError{"not_this_site", fmt.Sprintf("%s isn't for %s: sesh fills a login only on its own site", k, host)}
+	}
+	secret, err := store.GetFor(k, "secret, to fill it in on "+host)
+	if err != nil {
+		return uiLocked(err)
+	}
+	defer secure.SecureZeroBytes(secret)
+	reply.Username, reply.Password = e.Username, string(secret)
+	code := vault.Key{Kind: vault.KindTOTP, Service: k.Service, Username: k.Username}
+	switch c, err := store.Lookup(code); {
+	case errors.Is(err, vault.ErrNotFound):
+	case err != nil:
+		return uiLocked(err)
+	default:
+		key, err := store.GetFor(code, "TOTP key, to fill its code in on "+host)
+		if err != nil {
+			return uiLocked(err)
+		}
+		defer secure.SecureZeroBytes(key)
+		if reply.TOTP, err = totp.CodeAt(key, c.Settings.TOTP, time.Now()); err != nil {
+			return fmt.Errorf("%s's code: %w", code, err)
+		}
+	}
+	return nil
+}
+
+// browserGenerate makes a new password, or passphrase, as sesh generate
+// does, with its defaults for what req leaves out; it's stored nowhere.
+func browserGenerate(req *browserRequest, reply *browserReply) error {
+	g := genFlags{length: 24, words: 6, separator: "-", noSymbols: req.NoSymbols, capped: req.Capitalize, passphrase: req.Passphrase}
+	if req.Length != 0 {
+		g.length = req.Length
+	}
+	if req.Words != 0 {
+		g.words = req.Words
+	}
+	if req.Separator != "" {
+		g.separator = req.Separator
+	}
+	if err := g.check(); err != nil {
+		return &browserError{"bad_request", err.Error()}
+	}
+	pw, err := g.generate()
+	if err != nil {
+		return err
+	}
+	defer secure.SecureZeroBytes(pw)
+	reply.Password = string(pw)
+	return nil
+}
+
+// browserUnlockTouchID unlocks the vault with a fingerprint, through the
+// agent, as sesh ui's locked screen does: the system's Touch ID sheet
+// shows. Only where Touch ID unlock is on and usable for this vault.
+func browserUnlockTouchID(reply *browserReply) error {
+	if !touchIDPlatform {
+		return &browserError{"no_touch_id", "Touch ID unlock is only on macOS"}
+	}
+	cfg, err := settings()
+	if err != nil {
+		return err
+	}
+	dbPath := cfg.DBPath.Value
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if errors.Is(err, database.ErrNoVault) {
+		return noVault(dbPath)
+	}
+	if err != nil {
+		return err
+	}
+	conn, err := agent.EnsureAgent()
+	if err != nil {
+		return fmt.Errorf("sesh's agent can't be reached: %w", err)
+	}
+	defer closeAgentConn(conn)
+	var said []string
+	ok, err := tryTouchID(conn, filepath.Dir(dbPath), agent.UnlockID(mat.Verify), mat.Verify, true, func(format string, a ...any) {
+		said = append(said, fmt.Sprintf(format, a...))
+	})
+	switch {
+	case err != nil:
+		return err
+	case !ok && len(said) > 0:
+		return &browserError{"not_unlocked", strings.Join(said, " ")}
+	case !ok:
+		return &browserError{"not_unlocked", "Touch ID didn't unlock sesh: run any sesh command (or sesh ui) to unlock it with the master password"}
+	}
+	locked := false
+	reply.Locked = &locked
+	return nil
 }
