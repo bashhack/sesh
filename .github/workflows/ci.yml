@@ -128,7 +128,8 @@ jobs:
   # Its own jobs so they run beside the coverage run, not after it: three,
   # so the slowest package, sesh/cmd/sesh, whose tests mostly can't run in
   # parallel (they set environment variables), is split between two by
-  # test name (every other one, sorted), and the rest run in the third.
+  # test name (every other one, sorted, as go test -list gives them), and
+  # the rest run in the third.
   race:
     name: Test with -race (${{ matrix.part }})
     runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
@@ -154,6 +155,7 @@ jobs:
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
+          export GOEXPERIMENT=$RACE_GOEXPERIMENT
           CMD=github.com/bashhack/sesh/sesh/cmd/sesh
           case "$PART" in
             "the rest")
@@ -161,10 +163,13 @@ jobs:
               RUN=.
               ;;
             "commands "*)
-              # Its tests, every other one: the first half takes the odd
-              # lines, the second the even.
+              # Its tests, as go test lists them, every other one: the first
+              # half takes the odd lines, the second the even. Listed with
+              # the run's own flags, the test binary built is the one the
+              # run then takes from the build cache.
               HALF=${PART#commands }; HALF=${HALF%% *}
-              NAMES=$(grep -ho '^func \(Test\|Fuzz\|Example\)[A-Za-z0-9_]*' sesh/cmd/sesh/*_test.go | sed 's/^func //' | grep -vx TestMain | sort | awk -v h="$HALF" 'NR % 2 == h % 2' | paste -sd'|' -)
+              LISTED=$(go test -race -gcflags="$RACE_GCFLAGS" -vet=off -list '.*' "$CMD")
+              NAMES=$(echo "$LISTED" | grep -E '^(Test|Fuzz|Example)' | sort | awk -v h="$HALF" 'NR % 2 == h % 2' | paste -sd'|' -)
               [ -n "$NAMES" ] || { echo "no tests found for $PART"; exit 1; }
               echo "$PART: $(echo "$NAMES" | tr '|' '\n' | wc -l | tr -d ' ') tests"
               PKGS=$CMD
@@ -172,7 +177,7 @@ jobs:
               ;;
             *) echo "unknown part $PART"; exit 1 ;;
           esac
-          GOEXPERIMENT=$RACE_GOEXPERIMENT GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off -run "$RUN" $PKGS
+          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off -run "$RUN" $PKGS
 
   test-linux:
     name: Test (Linux)
