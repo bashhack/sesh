@@ -403,3 +403,53 @@ func TestSync_StartLockedFirst(t *testing.T) {
 		t.Error("still syncing after a start the lock kept from running")
 	}
 }
+
+// A master password changed on another computer is taken from the sync
+// panel: this vault's password, then the new one; the app goes on with
+// the vault opened anew, and a wrong one keeps the form.
+func TestSync_TakeKeyChange(t *testing.T) {
+	old, fresh := newFake(), newFake()
+	var asked []string
+	var err error
+	a := newApp(t, old, Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync, master password changed elsewhere", On: true, KeyChanged: true, Lines: []string{"⚠️  the master password was changed on another computer"}}, nil
+		},
+		TakeKeyChange: func(current, next []byte) (Changed, error) {
+			asked = append(asked, string(current)+">"+string(next))
+			if err != nil {
+				return Changed{}, err
+			}
+			return Changed{Vault: fresh, Said: []string{"This vault now opens with the new master password, as the other computers' do."}}, nil
+		},
+		KeyChangeNote: func() string { return "the folder's record may be an older one put back" },
+		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:       func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	if !strings.Contains(a.screen(), "take the new master password") {
+		t.Fatalf("the sync panel:\n%s", a.screen())
+	}
+	a.press("p")
+	if a.form == nil || a.form.title != "Take the new master password" || !strings.Contains(a.form.note, "older one put back") {
+		t.Fatalf("form %+v", a.form)
+	}
+	a.press("enter", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "Type this vault's master password") || len(asked) != 0 {
+		t.Fatalf("nothing typed: asked %q, form %+v", asked, a.form)
+	}
+	err = ErrWrongPassword
+	a.press("shift+tab", "old-password", "tab", "new-password-1", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "not the current master password") {
+		t.Fatalf("a wrong one: asked %q, form %+v", asked, a.form)
+	}
+	err = nil
+	a.press("enter")
+	if !slices.Equal(asked, []string{"old-password>new-password-1", "old-password>new-password-1"}) || a.form != nil {
+		t.Fatalf("asked %q, form %+v", asked, a.form)
+	}
+	if !strings.Contains(a.screen(), "now opens with the new master password") || !old.closed || a.v == nil || a.v.v != Vault(fresh) {
+		t.Errorf("after: old closed %v\n%s", old.closed, a.screen())
+	}
+}

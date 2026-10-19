@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/syncfolder"
+	"github.com/bashhack/sesh/internal/tui"
 )
 
 // syncedPair makes a laptop and a desktop syncing through folder, under
@@ -1106,5 +1108,47 @@ func TestSync_StatusAfterRestoreToAnEarlierKey(t *testing.T) {
 	out, err := runSyncOut(t, "", false, "status")
 	if err != nil || !strings.Contains(out, "Changed in the folder, to take: 1") {
 		t.Errorf("status: %q, %v; want the desktop's new entry to take", out, err)
+	}
+}
+
+// The app takes a master password change made on another computer, as
+// sesh sync does: refused with a wrong password of either kind, then the
+// vault opens with the new one and has the laptop's entries.
+func TestUITakeKeyChange(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	putEntry(t, "password/b", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := uiSyncState(cfg); err != nil || !st.KeyChanged {
+		t.Fatalf("the sync row: %+v, %v; want the change to take", st, err)
+	}
+	if _, err := uiTakeKeyChange(cfg, []byte("wrong-password"), []byte("new-password-2")); !errors.Is(err, tui.ErrWrongPassword) {
+		t.Errorf("a wrong own password: %v", err)
+	}
+	if _, err := uiTakeKeyChange(cfg, []byte("old-password-1"), []byte("wrong-password")); err == nil || !strings.Contains(err.Error(), "isn't the new master password") {
+		t.Errorf("a wrong new password: %v", err)
+	}
+	ch, err := uiTakeKeyChange(cfg, []byte("old-password-1"), []byte("new-password-2"))
+	if err != nil || ch.Vault == nil || !strings.Contains(strings.Join(ch.Said, " "), "now opens with the new master password") {
+		t.Fatalf("taking it: %+v, %v", ch, err)
+	}
+	ch.Vault.Close() //nolint:errcheck,gosec // test cleanup
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	if got := getEntry(t, "password/b"); got != "secret-2" {
+		t.Errorf("desktop: b = %q, want the laptop's", got)
+	}
+	if now, _ := settings(); keyChangeToTake(now) { //nolint:errcheck // checked by the result
+		t.Error("a change to take still, after taking it")
 	}
 }

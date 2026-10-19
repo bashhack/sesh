@@ -612,6 +612,57 @@ var errNotLatest = errors.New("some of the sync folder's files are sealed with a
 // vault has switched it returns the new key, which the caller zeroes, even
 // when the sync after fails.
 func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store *database.Store, ownKey []byte, newCfg passwordPromptConfig, keepRecovery bool) ([]byte, error) {
+	t, err := prepareKeyTake(cfg, f, store)
+	if err != nil {
+		return nil, err
+	}
+	defer t.close()
+	if t.notLatest {
+		if _, err := fmt.Fprintln(app.Stderr, "⚠️  "+errNotLatest.Error()); err != nil {
+			return nil, err
+		}
+	}
+	pw, err := folderPassword(newCfg, "Now the new master password, the one the other computers use: ", t.folderRec)
+	if err != nil {
+		return nil, err
+	}
+	defer secure.SecureZeroBytes(pw)
+	r, err := t.take(cfg, f, store, ownKey, pw, keepRecovery)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := fmt.Fprint(app.Stdout, strings.Join(r.said, "\n")+"\n"); err != nil {
+		return r.key, err
+	}
+	if r.syncErr != nil {
+		return r.key, fmt.Errorf("the sync after switching: %w; sesh sync tries again", r.syncErr)
+	}
+	return r.key, writeSyncSummary(app, tildePath(f.Dir()), r.sum)
+}
+
+// keyTake is a master password change made elsewhere, ready to be taken
+// once the new password is typed: its first link's proof checked with
+// this vault's key.
+type keyTake struct {
+	older     *database.OlderKeys
+	first     *syncfolder.KeyLink
+	info      *syncfolder.Info
+	own       []syncfolder.KeyLink
+	ownID     string
+	pending   string
+	folderRec database.UnlockMaterial
+	// notLatest says the folder's own files outrun its key record: it may
+	// be an older one put back (errNotLatest), said before the new
+	// password is asked for.
+	notLatest bool
+}
+
+func (t *keyTake) close() { t.older.Close() }
+
+// prepareKeyTake readies taking the master password change in f for the
+// vault open in store: errKeyForged when no proven link from this vault's
+// key leads to it.
+func prepareKeyTake(cfg *config.Config, f syncfolder.Folder, store *database.Store) (*keyTake, error) {
 	info, err := f.ReadInfo()
 	if err != nil {
 		return nil, err
@@ -620,73 +671,76 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 	if err != nil {
 		return nil, err
 	}
-	ownID := database.UnlockID(m.Verify)
-	own, err := store.SyncKeyLinks()
-	if err != nil {
+	t := &keyTake{info: info, ownID: database.UnlockID(m.Verify)}
+	if t.own, err = store.SyncKeyLinks(); err != nil {
 		return nil, err
 	}
-	pending, err := store.SyncKeyChange()
-	if err != nil {
+	if t.pending, err = store.SyncKeyChange(); err != nil {
 		return nil, err
 	}
 	// The change's first link, from this vault's key (or, settling a fork,
 	// one it replaced): its proof, made with that key, is checked before
 	// the new password is asked for.
-	k, err := folderKeyFrom(cfg.DBPath.Value, info, ownID)
+	k, err := folderKeyFrom(cfg.DBPath.Value, info, t.ownID)
 	if err != nil {
 		return nil, err
 	}
-	first, older, err := firstLink(store, info, k == keyFork)
-	if err != nil {
+	if t.first, t.older, err = firstLink(store, info, k == keyFork); err != nil {
 		return nil, err
 	}
-	if first == nil {
+	if t.first == nil {
 		return nil, errKeyForged
 	}
-	defer older.Close()
-	if !proofHolds(store, older, first) {
+	if !proofHolds(store, t.older, t.first) {
+		t.older.Close()
 		return nil, errKeyForged
 	}
 	// A record the folder's own files outrun may be an older one put
 	// back: said, and the password typed decides (one newer than the
 	// record's doesn't open it).
-	mine := replacedKeys(own)
-	mine[ownID] = true
-	if notLatest(f, info, mine) {
-		if _, err := fmt.Fprintln(app.Stderr, "⚠️  "+errNotLatest.Error()); err != nil {
-			return nil, err
-		}
-	}
-	folderRec := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
-	pw, err := folderPassword(newCfg, "Now the new master password, the one the other computers use: ", folderRec)
-	if err != nil {
-		return nil, err
-	}
-	defer secure.SecureZeroBytes(pw)
-	key := database.DeriveKey(pw, folderRec.Salt, folderRec.Params)
+	mine := replacedKeys(t.own)
+	mine[t.ownID] = true
+	t.notLatest = notLatest(f, info, mine)
+	t.folderRec = database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
+	return t, nil
+}
+
+// keyTaken is what taking a change did: the new key (the caller wipes it),
+// what to say, and the sync after, or why it failed.
+type keyTaken struct {
+	sum     *vaultsync.Summary
+	syncErr error
+	key     []byte
+	said    []string
+}
+
+// take switches the vault open in store, whose key is ownKey, to the new
+// master password pw (the folder's record's: checked by the caller),
+// keeping the recovery key when keepRecovery, and syncs.
+func (t *keyTake) take(cfg *config.Config, f syncfolder.Folder, store *database.Store, ownKey, pw []byte, keepRecovery bool) (*keyTaken, error) {
+	key := database.DeriveKey(pw, t.folderRec.Salt, t.folderRec.Params)
 	defer secure.SecureZeroBytes(key)
 	// From the new key back to this vault's, through links each of whose
 	// proofs holds with the key it opens to.
-	newID := database.UnlockID(folderRec.Verify)
-	back := database.NewCheckedOlderKeys(database.KeySealer(key), newID, info.Links)
+	newID := database.UnlockID(t.folderRec.Verify)
+	back := database.NewCheckedOlderKeys(database.KeySealer(key), newID, t.info.Links)
 	defer back.Close()
-	if back.Key(first.From) == nil {
+	if back.Key(t.first.From) == nil {
 		return nil, errKeyForged
 	}
 	// This vault's own links stay, with one from its key to the new: files
 	// it sealed with its key, on a branch the folder's links don't reach,
 	// go on opening.
-	link, err := database.NewKeyLink(ownKey, key, ownID, newID)
+	link, err := database.NewKeyLink(ownKey, key, t.ownID, newID)
 	if err != nil {
 		return nil, err
 	}
-	links := database.UnionLinks(own, back.Used())
-	var sum *vaultsync.Summary
-	var syncErr error
-	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, folderRec, keepRecovery, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links, Link: link}, func() string {
+	links := database.UnionLinks(t.own, back.Used())
+	r := &keyTaken{}
+	_, notes, err := rekeyTo(store, cfg.DBPath.Value, t.ownID, key, t.folderRec, keepRecovery, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links, Link: link}, func() string {
 		next, err := openWithKey(cfg.DBPath.Value, newID, key)
 		if err != nil {
-			syncErr = err
+			r.syncErr = err
 			return ""
 		}
 		defer closeAuditStore(next)
@@ -697,31 +751,24 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 				_ = f.WriteInfo(fresh) //nolint:errcheck // the next sync writes them, should this fail
 			}
 		}
-		sum, syncErr = syncOlder(next, cfg, f)
+		r.sum, r.syncErr = syncOlder(next, cfg, f)
 		return ""
 	})
 	if err != nil {
 		return nil, err
 	}
-	switched := bytes.Clone(key)
+	r.key = bytes.Clone(key)
 	unlockAgentWith(cfg.DBPath.Value, bytes.Clone(pw))
-	var said strings.Builder
-	said.WriteString("This vault now opens with the new master password, as the other computers' do.\n")
-	if pending != "" {
-		said.WriteString("This computer's own master password change wasn't kept: the one made on another computer was in the sync folder first.\n")
+	r.said = append(r.said, "This vault now opens with the new master password, as the other computers' do.")
+	if t.pending != "" {
+		r.said = append(r.said, "This computer's own master password change wasn't kept: the one made on another computer was in the sync folder first.")
 	}
 	for _, n := range []string{notes.touch, notes.recovery, notes.file} {
 		if n != "" {
-			said.WriteString(n + "\n")
+			r.said = append(r.said, n)
 		}
 	}
-	if _, err := fmt.Fprint(app.Stdout, said.String()); err != nil {
-		return switched, err
-	}
-	if syncErr != nil {
-		return switched, fmt.Errorf("the sync after switching: %w; sesh sync tries again", syncErr)
-	}
-	return switched, writeSyncSummary(app, tildePath(f.Dir()), sum)
+	return r, nil
 }
 
 // notLatest says whether the folder f, whose info is info, holds a file

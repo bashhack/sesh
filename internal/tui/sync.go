@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -125,8 +126,9 @@ type SyncState struct {
 	// Lines are what sesh sync status says, line by line: a warning or a
 	// problem starting ⚠️ or ❌.
 	Lines []string
-	// On says the vault syncs.
-	On bool
+	// On says the vault syncs; KeyChanged, that the master password was
+	// changed on another computer, and nothing syncs till it's taken.
+	On, KeyChanged bool
 }
 
 // syncRow is the settings panel's row for syncing.
@@ -168,8 +170,11 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 	for _, l := range st.Lines {
 		ov.items = append(ov.items, m.lineItem(l))
 	}
+	if st.KeyChanged && m.opts.TakeKeyChange != nil {
+		ov.items = append(ov.items, item{key: "p", label: "take the new master password…", rule: true, stay: true, run: m.takeKeyChange})
+	}
 	if it := m.syncItem(); it != nil {
-		it.rule, it.stay = true, true
+		it.rule, it.stay = !st.KeyChanged || m.opts.TakeKeyChange == nil, true
 		ov.items = append(ov.items, *it)
 	}
 	if it := m.resultsItem("r"); it != nil {
@@ -190,6 +195,35 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 		}})
 	}
 	m.ov = ov
+	return nil
+}
+
+// takeKeyChange asks for this vault's master password and the new one,
+// the other computers', and takes the change, as sesh sync does.
+func (m *Model) takeKeyChange() tea.Cmd {
+	current := &input{kind: inputSecret, label: "this vault's master password", prompt: "the one it opens with now"}
+	next := &input{kind: inputSecret, label: "the new master password", prompt: "the one your other computers use"}
+	f := &form{title: "Take the new master password", inputs: []*input{current, next}, row: -1, enterDone: "take it",
+		working: "Taking the new master password…", quitting: "Quitting once the new master password is taken…"}
+	f.note = "The master password was changed on another computer. This vault is re-encrypted under the new one, and syncs again."
+	if m.opts.KeyChangeNote != nil {
+		if n := m.opts.KeyChangeNote(); n != "" {
+			f.note += " ⚠️ " + n
+		}
+	}
+	f.submit = func() tea.Cmd {
+		switch {
+		case len(current.secret) == 0:
+			f.err = "Type this vault's master password."
+		case len(next.secret) == 0:
+			f.err = "Type the new master password, the one your other computers use."
+		default:
+			return m.runChangeWith(m.opts.TakeKeyChange, bytes.Clone(current.secret), bytes.Clone(next.secret))
+		}
+		return nil
+	}
+	f.focusInput(0)
+	m.form = f
 	return nil
 }
 

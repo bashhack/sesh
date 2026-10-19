@@ -67,6 +67,11 @@ func (m *Model) changePassword() tea.Cmd {
 // once the change commits, so nothing reads it meanwhile: what was being
 // read is let go, and the checks that would lock the app wait.
 func (m *Model) runChange(current, next []byte) tea.Cmd {
+	return m.runChangeWith(m.opts.ChangePassword, current, next)
+}
+
+// runChangeWith is runChange, the change made by change.
+func (m *Model) runChangeWith(change func(current, next []byte) (Changed, error), current, next []byte) tea.Cmd {
 	m.form.saving, m.form.err = true, ""
 	m.changing = true
 	// What's being read now comes back to an epoch gone: it's read again
@@ -75,7 +80,6 @@ func (m *Model) runChange(current, next []byte) tea.Cmd {
 	clear(m.pending)
 	clear(m.notesPending)
 	m.epoch++
-	change := m.opts.ChangePassword
 	return func() tea.Msg {
 		ch, err := change(current, next)
 		return changedMsg{ch: ch, err: err}

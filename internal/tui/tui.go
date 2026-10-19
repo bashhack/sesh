@@ -387,6 +387,13 @@ type Options struct {
 	StartSync       func(v Vault, dir string) (string, error)
 	SyncFolderOffer func() string
 	LeaveSync       func() (string, error)
+	// TakeKeyChange takes the master password change made on another
+	// computer (SyncState.KeyChanged), as sesh sync does: current is this
+	// vault's master password, next the new one, both wiped; it opens the
+	// vault again with next. KeyChangeNote is what to know before typing
+	// the new one ("" for nothing). nil: not offered.
+	TakeKeyChange func(current, next []byte) (Changed, error)
+	KeyChangeNote func() string
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
