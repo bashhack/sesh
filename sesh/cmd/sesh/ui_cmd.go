@@ -74,16 +74,32 @@ func runUI(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts := uiOptions(app, cfg, newUIVault(store))
-	m := tui.New(&opts)
 	// Last, once the app has let the vault go and what it held back is
 	// written: ui.lock_on_quit, as the settings are when it ends, so a
-	// change made in the app counts.
-	defer func() {
-		if said := lockOnQuit(); said != "" {
-			fmt.Fprintln(app.Stderr, said) //nolint:errcheck // best effort, on the way out
+	// change made in the app counts; before a shell the app ends for
+	// opens, once the shell no longer needs the vault.
+	locked := false
+	lock := func() {
+		if !locked {
+			locked = true
+			if said := lockOnQuit(); said != "" {
+				fmt.Fprintln(app.Stderr, said) //nolint:errcheck // best effort, on the way out
+			}
 		}
-	}()
+	}
+	defer lock()
+	then, err := runApp(app, cfg, store)
+	if err != nil || then == nil {
+		return err
+	}
+	return then(lock)
+}
+
+// runApp runs the app on store until it ends, and says what it has left
+// to do then.
+func runApp(app *App, cfg *config.Config, store *database.Store) (then func(release func()) error, err error) {
+	opts := uiOptions(app, cfg, newUIVault(store))
+	m := tui.New(&opts)
 	// What's written to stderr while the app draws (a warning while it
 	// unlocks again, say) would land on its screen: it's held, and
 	// written once the app has ended.
@@ -108,16 +124,15 @@ func runUI(app *App, args []string) error {
 		case <-done:
 		}
 	}()
-	_, err = p.Run()
-	if err != nil {
-		return fmt.Errorf("sesh ui: %w", err)
+	if _, err := p.Run(); err != nil {
+		return nil, fmt.Errorf("sesh ui: %w", err)
 	}
 	if said := m.Afterword(); said != "" {
 		if _, err := fmt.Fprintln(app.Stderr, said); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return m.Err()
+	return m.Then(), m.Err()
 }
 
 // lockOnQuit locks sesh's agent when ui.lock_on_quit is on, and says so,
@@ -254,12 +269,15 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return uiTakeKeyChange(settingsNow(cfg), current, next)
 		},
 		KeyChangeNote: func(v tui.Vault) string { return uiKeyChangeNote(settingsNow(cfg), v) },
-		RenewBackups:  func() (string, error) { return uiRenewBackups(dbPath) },
-		Backups:       func() (tui.Backups, error) { return uiBackups(dbPath) },
-		BackUp:        func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
-		DeleteBackup:  func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
-		PlanRestore:   func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
-		Restore:       func(path string) (string, error) { return uiRestore(dbPath, path) },
+		AWSSignIn: func(v tui.Vault, k vault.Key) (func() (func(func()) error, error), error) {
+			return uiAWSSignIn(app, v, k)
+		},
+		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
+		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
+		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
+		DeleteBackup: func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
+		PlanRestore:  func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
+		Restore:      func(path string) (string, error) { return uiRestore(dbPath, path) },
 		// Settings read now: sync.dir may have changed since the app started.
 		Recovery:       func() (tui.Recovery, error) { return uiRecovery(settingsNow(cfg)) },
 		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(settingsNow(cfg)) },

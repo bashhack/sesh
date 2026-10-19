@@ -135,6 +135,9 @@ func (m *Model) openMenu() tea.Cmd {
 	if e.Kind == vault.KindTOTP {
 		items = append(items, item{key: "q", label: "show the key as a QR code…", run: func() tea.Cmd { return m.openQR(&ek) }})
 	}
+	if isAWSEntry(e) && m.opts.AWSSignIn != nil {
+		items = append(items, item{key: "a", label: "sign in to AWS and open a shell", run: func() tea.Cmd { return m.awsSignIn(&ek) }})
+	}
 	if e.Kind == vault.KindFile {
 		items = append(items, item{key: "s", label: "save to a file…", run: func() tea.Cmd { return m.askSaveFile(&ek) }})
 	}
@@ -214,7 +217,8 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if ov.kind == panelNotice {
-		if k == "enter" {
+		// While it waits, only Esc leaves it.
+		if k == "enter" && !ov.loading {
 			m.ov = ov.back
 		}
 		return nil
@@ -997,6 +1001,9 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelNotice:
 		hint = th.hints([2]string{"↵", "ok"})
+		if ov.loading {
+			hint = th.hints([2]string{"esc", "leave it"})
+		}
 	case panelQR:
 		hint = th.hints([2]string{"c", "copy the link"}, [2]string{"esc", "close"})
 		if !ov.until.IsZero() {

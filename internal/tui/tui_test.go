@@ -3670,3 +3670,126 @@ func TestAWSMFADevice(t *testing.T) {
 		t.Errorf("added: change = %+v", c)
 	}
 }
+
+// Ctrl-K on an AWS profile's entry signs in, then the app ends, leaving
+// the shell to open; AWS refusing is said, and the app stays; Esc while
+// it signs in leaves it, and nothing opens. Other entries aren't offered
+// it.
+func TestAWSSignIn(t *testing.T) {
+	f := newFake()
+	awsKey := vault.AWSKey("work")
+	f.entries = append([]vault.Entry{{Key: awsKey}}, f.entries...)
+	f.secrets[awsKey] = seed
+	var refuse error
+	var asked []vault.Key
+	opened := 0
+	// AWS refusing comes from the sign-in, once the vault's let go.
+	a := newApp(t, f, Options{AWSSignIn: func(_ Vault, k vault.Key) (func() (func(func()) error, error), error) {
+		asked = append(asked, k)
+		return func() (func(func()) error, error) {
+			if refuse != nil {
+				return nil, refuse
+			}
+			return func(func()) error { opened++; return nil }, nil
+		}, nil
+	}})
+	// Refused: said over the panel, which Enter closes.
+	refuse = errors.New("AWS refused the next code too")
+	a.press("ctrl+k", "a")
+	if s := a.screen(); a.quit || !strings.Contains(s, "Not signed in: AWS refused the next code too") {
+		t.Fatalf("refused:\n%s", s)
+	}
+	a.press("enter")
+	if a.ov != nil || a.quit {
+		t.Fatalf("after the refusal, Enter: panel %v, quit %v", a.ov, a.quit)
+	}
+	// Left with Esc while it signs in: the sign-in that ends after opens
+	// nothing.
+	refuse = nil
+	e := f.entries[0]
+	cmd := a.awsSignIn(&e)
+	if s := a.screen(); !strings.Contains(s, "Signing in to AWS") || !strings.Contains(s, "leave it") {
+		t.Errorf("while signing in:\n%s", s)
+	}
+	a.press("enter") // only Esc leaves it while it waits
+	if a.ov == nil {
+		t.Fatal("Enter left the sign-in")
+	}
+	a.press("esc")
+	a.run(cmd)
+	if a.quit || a.Then() != nil {
+		t.Fatalf("left with Esc: quit %v", a.quit)
+	}
+	// Signed in: the app ends, and the shell is what's left to do.
+	a.press("ctrl+k", "a")
+	if !a.quit || a.Then() == nil {
+		t.Fatalf("signed in: quit %v\n%s", a.quit, a.screen())
+	}
+	if err := a.Then()(func() {}); err != nil || opened != 1 || len(asked) != 3 || asked[2] != awsKey {
+		t.Errorf("the shell: %v, opened %d; asked for %v", err, opened, asked)
+	}
+	// Another entry has no such action.
+	b := newApp(t, newFake(), Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) { return nil, nil }})
+	b.press("down", "ctrl+k")
+	if s := b.screen(); strings.Contains(s, "sign in to AWS") {
+		t.Errorf("a TOTP entry not an AWS profile's has it:\n%s", s)
+	}
+}
+
+// The sign-in talks to AWS with the vault let go: a lock meanwhile doesn't
+// wait for it, and opens nothing once it's done; the vault locked under
+// the sign-in locks the app.
+func TestAWSSignInLetsTheVaultGo(t *testing.T) {
+	f := newFake()
+	awsKey := vault.AWSKey("work")
+	f.entries = append([]vault.Entry{{Key: awsKey}}, f.entries...)
+	f.secrets[awsKey] = seed
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
+		return func() (func(func()) error, error) {
+			close(started)
+			<-release
+			return func(func()) error { return nil }, nil
+		}, nil
+	}})
+	e := f.entries[0]
+	cmd := a.awsSignIn(&e)
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+	<-started
+	g := a.v
+	closed := make(chan struct{})
+	go func() { g.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the vault waited for AWS")
+	}
+	a.lock("locked")
+	close(release)
+	_, next := a.Update(<-got)
+	a.run(next)
+	if a.quit || a.Then() != nil {
+		t.Errorf("signed in after a lock: quit %v", a.quit)
+	}
+
+	// Signed in, then a lock before the app has ended: no shell.
+	c := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
+		return func() (func(func()) error, error) { return func(func()) error { return nil }, nil }, nil
+	}})
+	cmd = c.awsSignIn(&e)
+	c.Update(cmd()) // its tea.Quit not yet run
+	c.lock("locked")
+	if c.Then() != nil {
+		t.Error("a lock after signing in left the shell to open")
+	}
+
+	// The vault locked as the sign-in reads it: the app locks.
+	b := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
+		return nil, Locked("sesh's agent locked the vault.")
+	}})
+	b.press("ctrl+k", "a")
+	if s := b.screen(); b.v != nil || !strings.Contains(s, "sesh's agent locked the vault.") {
+		t.Errorf("locked under the sign-in:\n%s", s)
+	}
+}

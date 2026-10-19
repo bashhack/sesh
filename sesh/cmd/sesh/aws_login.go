@@ -34,8 +34,9 @@ var credentialVars = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS
 // gets the profile, not the credentials. When the session has ended, sesh
 // signs in again with the AWS CLI, offering the MFA code it holds for the
 // profile while the browser asks. Inside a shell sesh aws opened, it signs
-// in if it must, and opens no other.
-func runAWSLogin(app *App, profile, kind string, noSubshell bool) error {
+// in if it must, and opens no other. release, when set, is called once
+// the shell no longer needs the vault, before it starts.
+func runAWSLogin(app *App, profile, kind string, noSubshell bool, release func()) error {
 	if kind == aws.KindRole {
 		return fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; sesh aws%s --clip copies the code", awsProfileName(profile), awsProfileFlag(profile))
 	}
@@ -57,7 +58,7 @@ func runAWSLogin(app *App, profile, kind string, noSubshell bool) error {
 		_, err := fmt.Fprintln(app.Stderr, "Signed in again: this shell, sesh's already, goes on with the renewed session.")
 		return err
 	}
-	return app.LaunchSubshell(p, nil)
+	return app.LaunchSubshell(p, release)
 }
 
 // signIn runs aws login (or aws sso login) for profile, offering the MFA

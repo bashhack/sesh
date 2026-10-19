@@ -182,6 +182,13 @@ func (p *Provider) sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
+// ForProfile is p for profile ("" for the default), as --profile gives
+// it.
+func (p *Provider) ForProfile(profile string) *Provider {
+	p.profile = profile
+	return p
+}
+
 // GetProfile returns the current AWS profile
 func (p *Provider) GetProfile() string {
 	return p.profile
