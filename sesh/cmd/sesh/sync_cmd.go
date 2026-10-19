@@ -1063,7 +1063,7 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 // setBackSaid says n entries, named, were made as the folder has them
 // on taking a master password change (vaultsync.Summary.SetBack).
 func setBackSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, which anyone who knew it could have written, and wasn't typed here. A computer of yours that made such a change sends it once it takes the new password", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, so it isn't kept. Usually that's a change your other computers made since; if not, someone who knew the old password may have written it. A computer of yours that made a change there sends it once it takes the new password", nouns(n, "entry", "entries"), names)
 }
 
 // heldBackSaid says n entries, named, are held back on taking a master
@@ -1076,7 +1076,7 @@ func heldBackSaid(n int, names string) string {
 // master password change until their secret is typed again
 // (vaultsync.Summary.Retype).
 func retypeSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s) made here, whose secret this vault no longer has as typed here (forgotten, or trimmed to history.keep): not sent until it's typed again here (sesh edit <entry> --secret)", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s) made here, whose secret this vault no longer has as typed here (forgotten, or trimmed to history.keep): not sent until it's typed again here (sesh edit <entry> --secret, or --generate)", nouns(n, "entry", "entries"), names)
 }
 
 // earlierKeySaid says n entries had a file sealed with an earlier master

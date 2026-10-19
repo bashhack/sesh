@@ -47,8 +47,9 @@ type Summary struct {
 	Notes []string
 	// SetBack are the entries, by name, made as the folder has them under
 	// the new key, on the first sync after a master password change taken
-	// here: what was here besides was taken under the old key, and
-	// nothing was typed here since the folder's version.
+	// here, differing from what was here: what was here besides was taken
+	// under the old key (often just older than the folder's), and nothing
+	// typed here since the folder's version is lost.
 	SetBack []string
 	// HeldBack are the entries, by name, the folder has no version of
 	// under the new key, nor made here: not sent, and left as they are,
@@ -726,23 +727,13 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		return err
 	}
 	if folder != nil && sameEntry(r, folder) && slices.Equal(r.Forgotten, folder.Forgotten) {
-		// Said as set back only when what was agreed here held changes
-		// the folder's hasn't seen: one simply newer is taken. (Counts
-		// can be made up with the old password; they choose only what's
-		// said, not what's kept.)
-		newer := false
-		if base, err := y.store.SyncBase(uid); err == nil && base != nil {
-			newer = folder.Versions.Covers(base.Versions)
-			base.Wipe()
-		}
 		if err := y.apply(uid, rev, folder, hash); err != nil {
 			return err
 		}
-		switch {
-		case sameEntry(local, folder):
-		case newer:
-			y.sum.Received = append(y.sum.Received, recordName(uid, folder))
-		default:
+		// Said whether the folder's is simply newer or what was here was
+		// forged: change counts, which the old password can make up,
+		// can't tell them apart.
+		if !sameEntry(local, folder) {
 			y.sum.SetBack = append(y.sum.SetBack, name)
 		}
 	} else {
@@ -1149,7 +1140,7 @@ func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash 
 		}
 		break
 	}
-	// One held back under the name (Summary.HeldBack) is never sent: it's
+	// One held back under the name (Summary.HeldBack, Retype) is never sent: it's
 	// renamed here, quietly, as the folder's version of it, when there is
 	// one, has its own name.
 	for _, it := range y.items {
