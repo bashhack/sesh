@@ -103,6 +103,7 @@ var subcommands = []candidate{
 	{"run", "Run a command with secrets from the vault in its environment"},
 	{"inject", "Fill a template's sesh:// references into a file"},
 	{"git-credential", "Give git a site's password from sesh, as its credential helper"},
+	{"browser", "Set up sesh's browser extension: install, uninstall"},
 	{"sync", "Sync the vault with your other computers, through a folder"},
 	{"aws", "Sign in to AWS with your MFA code"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
@@ -118,7 +119,7 @@ var commands = map[string]func(*App, []string) error{
 	"recovery": runRecovery, "recover": runRecover, "touchid": runTouchID, "config": runConfig,
 	"init": runInit, "agent": runAgent, "run": runRun, "inject": runInject, "aws": runAWS,
 	"git-credential": runGitCredential, "completion": runCompletion, "sync": runSync,
-	"browser-host": runBrowserHost,
+	"browser-host": runBrowserHost, "browser": runBrowser,
 }
 
 // hiddenCommands run, but aren't in the help or completion: another
@@ -904,6 +905,7 @@ Setup and more:
   sesh run [--env N=<ref>] -- <cmd>   Run a command with secrets in its environment
   sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references
   sesh git-credential             Git's credential helper: a site's password from sesh
+  sesh browser install|uninstall  Set up sesh's browser extension
   sesh aws [setup]                Sign in to AWS with your MFA code
   sesh completion bash|zsh|fish   Print a shell completion script
 

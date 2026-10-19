@@ -45,6 +45,10 @@ func defaultDataDirPath() (string, error) {
 	return filepath.Join(base, "sesh"), nil
 }
 
+// DefaultDataDir is sesh's own folder for its files, where the vault
+// lives unless db_path puts it elsewhere; it isn't made.
+func DefaultDataDir() (string, error) { return defaultDataDirPath() }
+
 func defaultDataDir() (string, error) {
 	dir, err := defaultDataDirPath()
 	if err != nil {

@@ -21,7 +21,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "commands", words: all(""), want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "sync", "aws", "completion")},
+		{name: "commands", words: all(""), want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "browser", "sync", "aws", "completion")},
 		{name: "command prefix", words: all("co"), want: all("copy", "code", "config", "completion")},
 		{name: "run flags", words: all("run", "-"), has: all("--env", "--env-file", "--no-masking")},
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
@@ -49,6 +49,8 @@ func TestComplete(t *testing.T) {
 		{name: "export file", words: all("export", "--file", ""), files: true},
 		{name: "add's QR image", words: all("add", "totp", "--qr-image", ""), files: true},
 		{name: "aws setup", words: all("aws", ""), want: all("setup")},
+		{name: "browser", words: all("browser", ""), want: all("install", "uninstall")},
+		{name: "browser, then nothing", words: all("browser", "install", ""), want: nil},
 		{name: "aws flags", words: all("aws", "-"), has: all("--clip", "--profile", "--no-subshell")},
 		{name: "trash commands", words: all("trash", ""), want: all("list", "restore", "remove", "empty")},
 		{name: "trash entry flags", words: all("trash", "github", "-"), want: all("--force", "--purge", "--db-path")},
@@ -103,7 +105,7 @@ func TestComplete(t *testing.T) {
 		{name: "backup's file after its flag with a value", words: all("backup", "--force=true", ""), files: true},
 		{name: "backup commands after a setting", words: all("backup", "--db-path", "x.db", ""), want: all("list", "delete")},
 		{name: "config set's setting after a flag", words: all("config", "set", "--force", "hi"), want: all("history.keep")},
-		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "sync", "aws", "completion")},
+		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "browser", "sync", "aws", "completion")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(tt.words)

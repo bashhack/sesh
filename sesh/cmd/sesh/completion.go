@@ -223,6 +223,11 @@ func complete(words []string) (cands []candidate, files bool) {
 				specs[i].path = true
 			}
 		}
+	case "browser":
+		if len(before) == 1 {
+			return matching([]candidate{{"install", "Set up sesh's browser extension"}, {"uninstall", "Undo it"}}, cur), false
+		}
+		return nil, false
 	case "aws":
 		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
 			return matching([]candidate{{"setup", "Store a profile's MFA key"}}, cur), false

@@ -348,7 +348,7 @@ $ sesh config set clipboard_timeout 15s
 | `sesh lock` | Locks sesh: the next command asks for the master password | |
 | `sesh passwd` | Changes the master password | |
 
-`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential` and `sesh ui` each have their own section below; `sesh config` and `sesh init` are in [Configuration file](#configuration-file).
+`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential`, `sesh browser` and `sesh ui` each have their own section below; `sesh config` and `sesh init` are in [Configuration file](#configuration-file).
 
 ### AWS Options (`sesh aws`)
 
@@ -1566,6 +1566,20 @@ git config --global credential.helper '!sesh git-credential'
 - **None, or several:** sesh gives nothing, and git asks as it would without it. With several, sesh says which, and how to tell them apart: give each a different URL, or name the username for git (`git config --global credential.https://github.com.username alice`).
 - **Store and erase:** git also asks a helper to store a password that worked, and to erase one a site refused. sesh does neither: it gives only what you added, and a password refused once (a typo in a username, say) stays in the vault. Change it with `sesh edit`.
 - **Unlocking:** reading the password is recorded in the audit log, as `sesh get` is. When sesh needs the master password, it asks at the terminal, as git's own questions are; Touch ID unlock and a running agent work as for any command.
+
+### The browser extension (`sesh browser`)
+
+sesh's browser extension, [sesh-browser](https://github.com/bashhack/sesh-browser), fills a site's login from the vault, in Chrome and Firefox. It's being built, and is loaded by hand for now. It asks sesh, through the browser's native messaging, for the tab's site's logins; sesh does the work:
+
+```bash
+sesh browser install      # tell Chrome and Firefox where sesh is
+sesh browser uninstall    # undo it
+```
+
+- **What install writes:** for each of Chrome and Firefox you've run, the file saying which program the browser starts for the extension (`io.github.bashhack.sesh.json`, in the browser's `NativeMessagingHosts` folder), letting only sesh's extension start it; and that program, a small script in sesh's folder (`browser-host`) that runs `sesh browser-host`, which only the browser runs. The script names the `sesh` on your PATH when that's this sesh (Homebrew's link, which an upgrade keeps pointing at the new one); after moving sesh otherwise, run install again. `sesh doctor`'s Browser row says which browsers are set up, and whether what they'd start is there.
+- **Which logins:** password and API key entries whose URL, or an extra URL in a plain field named `url-2`, `url-3` and so on, is the tab's site: the same scheme, the same host (`github.com` isn't `gist.github.com`'s), and the same port. An https entry is never filled on an http page.
+- **Filling:** only when you open the extension (its button, or Alt+Shift+S) and choose a login. sesh checks the site again itself, gives that one login's username and password, and its TOTP entry's code (one with the same name and username), and records each read in the audit log, naming the site (`secret, to fill it in on github.com`). The extension keeps nothing.
+- **Locked:** sesh is never unlocked through the browser with the master password. The extension offers Touch ID when it's on; otherwise run any sesh command, or `sesh ui`, to unlock it. Variables set in your shell (`SESH_DB_PATH`, say) don't reach the sesh the browser starts: when it says there's no vault, it names where it looked.
 
 ### Importing from other apps (`sesh import`)
 
