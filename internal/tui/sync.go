@@ -137,6 +137,10 @@ func (m *Model) syncRow(st SyncState) item {
 	}
 	detail := "Not syncing with other computers. sesh sync init <folder> makes a sync folder from this vault; on another computer, sesh sync join <folder>."
 	does := "see how"
+	if m.opts.StartSync != nil {
+		detail = "Not syncing with other computers. Enter asks for a folder a sync tool keeps the same on your computers, and makes it this vault's sync folder, as sesh sync init does; on each other computer, sesh sync join it."
+		does = "start syncing"
+	}
 	if st.On {
 		detail = strings.Join(st.Lines, "\n")
 		does = "see it"
@@ -204,12 +208,20 @@ func (m *Model) startSync() tea.Cmd {
 	}
 	start := m.opts.StartSync
 	return m.askOver(true, "Start syncing", "Folder", offer, "A folder a sync tool keeps the same on your computers (iCloud Drive, Dropbox, Syncthing), as a full path or from ~/. It's made the sync folder of this vault; on each other computer, sesh sync join it.", nil, func(dir string) (string, tea.Cmd) {
-		if strings.TrimSpace(dir) == "" {
+		dir = strings.TrimSpace(dir)
+		switch {
+		case dir == "":
 			return "Type the folder to sync through.", nil
+		case !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "/"):
+			return "Type the folder as a full path, or one from ~/.", nil
+		case m.syncing:
+			return "A sync is under way; press Enter again in a moment.", nil
 		}
 		m.say("Making the sync folder…")
+		// No sync of the app's own meanwhile: the first is this one.
+		m.syncing = true
 		return "", m.read(func(v Vault, _ func() bool) tea.Msg {
-			said, err := start(v, strings.TrimSpace(dir))
+			said, err := start(v, dir)
 			return syncSetMsg{said: said, err: err}
 		})
 	})
@@ -218,6 +230,7 @@ func (m *Model) startSync() tea.Cmd {
 // gotSyncSet says what starting or stopping syncing did, and shows the
 // settings again as they are now.
 func (m *Model) gotSyncSet(msg syncSetMsg) tea.Cmd {
+	m.syncing = false
 	if msg.err != nil {
 		m.sayBad(msg.err.Error())
 	} else {

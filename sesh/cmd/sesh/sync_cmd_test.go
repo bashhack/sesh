@@ -887,6 +887,9 @@ func TestUIStartAndLeaveSync(t *testing.T) {
 	if _, err := uiStartSync(cfg, v, "sync"); err == nil || !strings.Contains(err.Error(), "full path") {
 		t.Errorf("a relative path: %v", err)
 	}
+	if _, err := uiStartSync(cfg, v, filepath.Dir(cfg.DBPath.Value)); err == nil || !strings.Contains(err.Error(), "vault") {
+		t.Errorf("the vault's own folder: %v", err)
+	}
 	folder := filepath.Join(dir, "sync")
 	said, err := uiStartSync(cfg, v, folder)
 	if err != nil || !strings.Contains(said, "Made the sync folder") {
@@ -898,6 +901,9 @@ func TestUIStartAndLeaveSync(t *testing.T) {
 	now, err := settings()
 	if err != nil || now.SyncDir.Value != folder {
 		t.Fatalf("sync.dir %q, %v", now.SyncDir.Value, err)
+	}
+	if _, err := uiStartSync(now, v, filepath.Join(dir, "other")); err == nil || !strings.Contains(err.Error(), "syncs with") {
+		t.Errorf("syncing already: %v", err)
 	}
 	if said, err := leaveSync(now); err != nil || !strings.Contains(said, "no longer syncs") {
 		t.Errorf("leave: %q, %v", said, err)

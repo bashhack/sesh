@@ -359,6 +359,11 @@ func TestSync_StartAndLeave(t *testing.T) {
 	if a.form == nil || !strings.Contains(a.form.err, "Type the folder") || len(started) != 0 {
 		t.Fatalf("nothing typed: started %q, form %+v", started, a.form)
 	}
+	a.press("sync", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "full path") || len(started) != 0 {
+		t.Fatalf("a relative path: started %q, form %+v", started, a.form)
+	}
+	a.press("ctrl+u")
 	a.press("~/sync", "enter")
 	if !slices.Equal(started, []string{"~/sync"}) || !strings.Contains(a.screen(), "Made the sync folder ~/sync.") {
 		t.Fatalf("started %q:\n%s", started, a.screen())
