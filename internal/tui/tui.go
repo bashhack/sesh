@@ -397,14 +397,16 @@ type Options struct {
 	// the new one ("" for nothing). nil: not offered.
 	TakeKeyChange func(current, next []byte) (Changed, error)
 	KeyChangeNote func(v Vault) string
+	// AWSProfile is the profile sesh aws signs in with when it isn't given
+	// one (AWS_PROFILE), which the AWS forms start with; nil: none.
+	AWSProfile func() string
 	// AWSSignIn starts signing in to AWS with the profile whose MFA entry
-	// k is, as sesh aws --profile does: it reads what it needs of v, and
-	// returns the sign-in, which runs once the vault's let go, as far as
-	// it goes with the app open, and gives the shell to open once the app
-	// has ended; release, called once that shell no longer needs the
-	// vault, before it starts, lets sesh lock (ui.lock_on_quit). nil: not
-	// offered.
-	AWSSignIn func(v Vault, k vault.Key) (signIn func() (shell func(release func()) error, err error), err error)
+	// is, or would be, k, as sesh aws --profile does, in steps run as the
+	// app needs: this one with the vault let go, then what it returns
+	// with the vault open, then the sign-in it returns with the vault let
+	// go again, which gives the shell to open once the app has ended.
+	// nil: not offered.
+	AWSSignIn func(k vault.Key) (AWSVaultStep, error)
 	// AWSSetup is sesh aws setup, for the app's; nil: not offered.
 	AWSSetup AWSSetup
 	// RenewBackups deletes the vault's backups and makes a fresh one, and

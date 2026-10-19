@@ -150,7 +150,7 @@ func (m *Model) endAWSSetup() {
 func (m *Model) openAWSSetup() tea.Cmd {
 	m.endAWSSetup()
 	m.ov = nil
-	profile := m.textInput("profile", "")
+	profile := m.textInput("profile", m.awsProfile())
 	profile.hint = "the AWS CLI profile, as sesh aws --profile names it; empty for the default profile"
 	f := &form{title: "Set up AWS MFA", inputs: []*input{profile}, row: -1, enterDone: "check it",
 		note: "Stores an AWS CLI profile's MFA key, as sesh aws setup does, for sesh aws to sign in with its codes."}

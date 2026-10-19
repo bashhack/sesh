@@ -3684,15 +3684,13 @@ func TestAWSSignIn(t *testing.T) {
 	var asked []vault.Key
 	opened := 0
 	// AWS refusing comes from the sign-in, once the vault's let go.
-	a := newApp(t, f, Options{AWSSignIn: func(_ Vault, k vault.Key) (func() (func(func()) error, error), error) {
-		asked = append(asked, k)
-		return func() (func(func()) error, error) {
+	a := newApp(t, f, Options{AWSSignIn: awsSignInFake(func(k vault.Key) error { asked = append(asked, k); return nil }, nil,
+		func() (AWSShell, error) {
 			if refuse != nil {
 				return nil, refuse
 			}
 			return func(func()) error { opened++; return nil }, nil
-		}, nil
-	}})
+		})})
 	// Refused: said over the panel, which Enter closes.
 	refuse = errors.New("AWS refused the next code too")
 	a.press("ctrl+k", "a")
@@ -3729,7 +3727,7 @@ func TestAWSSignIn(t *testing.T) {
 		t.Errorf("the shell: %v, opened %d; asked for %v", err, opened, asked)
 	}
 	// Another entry has no such action.
-	b := newApp(t, newFake(), Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) { return nil, nil }})
+	b := newApp(t, newFake(), Options{AWSSignIn: awsSignInFake(nil, nil, nil)})
 	b.press("down", "ctrl+k")
 	if s := b.screen(); strings.Contains(s, "sign in to AWS") {
 		t.Errorf("a TOTP entry not an AWS profile's has it:\n%s", s)
@@ -3745,13 +3743,11 @@ func TestAWSSignInLetsTheVaultGo(t *testing.T) {
 	f.entries = append([]vault.Entry{{Key: awsKey}}, f.entries...)
 	f.secrets[awsKey] = seed
 	started, release := make(chan struct{}), make(chan struct{})
-	a := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
-		return func() (func(func()) error, error) {
-			close(started)
-			<-release
-			return func(func()) error { return nil }, nil
-		}, nil
-	}})
+	a := newApp(t, f, Options{AWSSignIn: awsSignInFake(nil, nil, func() (AWSShell, error) {
+		close(started)
+		<-release
+		return func(func()) error { return nil }, nil
+	})})
 	e := f.entries[0]
 	cmd := a.awsSignIn(&e)
 	got := make(chan tea.Msg, 1)
@@ -3774,9 +3770,7 @@ func TestAWSSignInLetsTheVaultGo(t *testing.T) {
 	}
 
 	// Signed in, then a lock before the app has ended: no shell.
-	c := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
-		return func() (func(func()) error, error) { return func(func()) error { return nil }, nil }, nil
-	}})
+	c := newApp(t, f, Options{AWSSignIn: awsSignInFake(nil, nil, func() (AWSShell, error) { return func(func()) error { return nil }, nil })})
 	cmd = c.awsSignIn(&e)
 	c.Update(cmd()) // its tea.Quit not yet run
 	c.lock("locked")
@@ -3785,12 +3779,49 @@ func TestAWSSignInLetsTheVaultGo(t *testing.T) {
 	}
 
 	// The vault locked as the sign-in reads it: the app locks.
-	b := newApp(t, f, Options{AWSSignIn: func(Vault, vault.Key) (func() (func(func()) error, error), error) {
-		return nil, Locked("sesh's agent locked the vault.")
-	}})
+	b := newApp(t, f, Options{AWSSignIn: awsSignInFake(nil, Locked("sesh's agent locked the vault."), nil)})
 	b.press("ctrl+k", "a")
 	if s := b.screen(); b.v != nil || !strings.Contains(s, "sesh's agent locked the vault.") {
 		t.Errorf("locked under the sign-in:\n%s", s)
+	}
+
+	// How the profile signs in is found with the vault let go too (it may
+	// ask the AWS CLI): closing it doesn't wait.
+	firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
+	d := newApp(t, f, Options{AWSSignIn: awsSignInFake(func(vault.Key) error {
+		close(firstStarted)
+		<-firstRelease
+		return nil
+	}, nil, func() (AWSShell, error) { return func(func()) error { return nil }, nil })})
+	cmd = d.awsSignIn(&e)
+	go func() { got <- cmd() }()
+	<-firstStarted
+	g, closed = d.v, make(chan struct{})
+	go func() { g.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the vault waited for the profile's kind")
+	}
+	close(firstRelease)
+	<-got
+}
+
+// awsSignInFake is an AWSSignIn whose steps are first (with the vault let
+// go), then the vault step's err, then signIn.
+func awsSignInFake(first func(k vault.Key) error, vaultErr error, signIn AWSSignInStep) func(k vault.Key) (AWSVaultStep, error) {
+	return func(k vault.Key) (AWSVaultStep, error) {
+		if first != nil {
+			if err := first(k); err != nil {
+				return nil, err
+			}
+		}
+		return func(Vault) (AWSSignInStep, error) {
+			if vaultErr != nil {
+				return nil, vaultErr
+			}
+			return signIn, nil
+		}, nil
 	}
 }
 
@@ -4112,15 +4143,13 @@ func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
 	}
 }
 
-// Ctrl-G's sign in to AWS… asks the profile (the AWS CLI's offered) and
-// signs in with it whether or not sesh has its MFA entry; the default
+// Ctrl-G's sign in to AWS… asks the profile (the AWS CLI's offered, the
+// form starting with AWS_PROFILE's), and signs in with it; the default
 // profile's entry is totp/aws/default.
 func TestAWSSignInFromTheMenu(t *testing.T) {
 	var asked []vault.Key
-	a := newApp(t, newFake(), Options{AWSSetup: &fakeAWSSetup{}, AWSSignIn: func(_ Vault, k vault.Key) (func() (func(func()) error, error), error) {
-		asked = append(asked, k)
-		return func() (func(func()) error, error) { return func(func()) error { return nil }, nil }, nil
-	}})
+	a := newApp(t, newFake(), Options{AWSSetup: &fakeAWSSetup{}, AWSSignIn: awsSignInFake(func(k vault.Key) error { asked = append(asked, k); return nil }, nil,
+		func() (AWSShell, error) { return func(func()) error { return nil }, nil })})
 	a.press("ctrl+g", "w")
 	if a.form == nil || a.form.title != "Sign in to AWS" || !slices.Equal(a.form.inputs[0].offers, []string{"work", "home"}) {
 		t.Fatalf("the form:\n%s", a.screen())
@@ -4135,6 +4164,11 @@ func TestAWSSignInFromTheMenu(t *testing.T) {
 	}
 	b := newApp(t, newFake(), Options{AWSSignIn: a.opts.AWSSignIn})
 	b.press("ctrl+g", "w", "enter")
+	c := newApp(t, newFake(), Options{AWSSignIn: a.opts.AWSSignIn, AWSProfile: func() string { return "from-env" }})
+	c.press("ctrl+g", "w")
+	if c.form == nil || c.form.inputs[0].value() != "from-env" {
+		t.Errorf("the form doesn't start with AWS_PROFILE's profile:\n%s", c.screen())
+	}
 	if len(asked) != 2 || asked[1] != vault.AWSKey("") {
 		t.Errorf("the default profile: asked %v", asked)
 	}

@@ -78,9 +78,13 @@ func TestUI_AWSSignIn(t *testing.T) {
 	u := newUIVault(store)
 	defer u.Close() //nolint:errcheck // test cleanup
 	app := agentTestApp()
-	// signIn is the sign-in for k, both parts of it.
+	// signIn is the sign-in for k, all its steps.
 	signIn := func(k vault.Key) (func(func()) error, error) {
-		s, err := uiAWSSignIn(app, u, k)
+		read, err := uiAWSSignIn(app, k)
+		if err != nil {
+			return nil, err
+		}
+		s, err := read(u)
 		if err != nil {
 			return nil, err
 		}
@@ -99,19 +103,37 @@ func TestUI_AWSSignIn(t *testing.T) {
 	if shell, err := signIn(vault.AWSKey("work")); shell != nil || err == nil || !strings.Contains(err.Error(), "AccessDenied") {
 		t.Errorf("AWS refusing: %v", err)
 	}
+	// A profile with access keys and no MFA key in sesh is told to set
+	// one up, AWS not asked.
+	f.err, f.profiles = nil, nil
+	if _, err := signIn(vault.AWSKey("personal")); err == nil || !strings.Contains(err.Error(), "sesh has no MFA key for profile personal, which signs in with an IAM user's access keys") || len(f.profiles) != 0 {
+		t.Errorf("no MFA key: %v; sessions asked for %q", err, f.profiles)
+	}
 	stubSTS(t, f, aws.KindRole)
-	if _, err := signIn(vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "assumes a role") {
+	if _, err := signIn(vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "assumes a role") || !strings.Contains(err.Error(), "Enter on its entry copies the code") {
 		t.Errorf("a role: %v", err)
+	}
+	if _, err := signIn(vault.AWSKey("personal")); err == nil || !strings.Contains(err.Error(), "set up AWS MFA… stores its key") {
+		t.Errorf("a role with no MFA key in sesh: %v", err)
 	}
 	stubSTS(t, f, aws.KindLogin)
 	f.profiles = nil
 	if shell, err := signIn(vault.AWSKey("work")); err != nil || shell == nil || len(f.profiles) != 0 {
 		t.Errorf("aws login: %v; sessions asked for %q", err, f.profiles)
 	}
-	// The sign-in talks to AWS with the vault closed: what it needs is
-	// read first.
+	// How the profile signs in is found before the vault is read, and
+	// the sign-in talks to AWS with the vault closed: what it needs is
+	// read in between.
 	stubSTS(t, f, "")
-	s, err := uiAWSSignIn(app, u, vault.AWSKey("work"))
+	kinds := 0
+	was := awsProfileKind
+	awsProfileKind = func(p string) string { kinds++; return was(p) }
+	read, err := uiAWSSignIn(app, vault.AWSKey("work"))
+	if err != nil || kinds != 1 {
+		t.Fatalf("the kind asked %d times before the vault: %v", kinds, err)
+	}
+	awsProfileKind = was
+	s, err := read(u)
 	if err != nil {
 		t.Fatal(err)
 	}
