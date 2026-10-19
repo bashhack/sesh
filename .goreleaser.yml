@@ -89,6 +89,7 @@ brews:
       sesh aws needs the AWS CLI (brew install awscli); nothing else does.
       Shell completion is installed for bash, zsh and fish; your shell's
       completion has to be turned on to use it: https://docs.brew.sh/Shell-Completion
+      sesh's browser extension needs one step, run once: sesh browser install
 checksum:
   name_template: 'checksums.txt'
 

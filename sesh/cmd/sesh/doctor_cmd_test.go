@@ -99,6 +99,7 @@ func TestDoctor_ASoundVault(t *testing.T) {
 		"  -     Backups         automatic backups are off (backup.every_days = 0)\n" +
 		"  -     Sync            off\n" +
 		"                        sesh sync init syncs this vault with your other computers\n" +
+		"  -     Browser         the extension isn't set up (sesh browser install)\n" +
 		"\nVault: " + tildePath(env.dbPath) + "\n" +
 		"  ok    File            ok\n" +
 		"  ok    Entries         2 entries, all readable\n" +

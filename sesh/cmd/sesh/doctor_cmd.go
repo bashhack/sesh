@@ -125,6 +125,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 	}
 	checkBackups(c, cfg)
 	checkSync(c, cfg, matErr)
+	checkBrowser(c)
 	checkClipboard(c)
 	return func(w io.Writer) error {
 		c.section("\nVault: " + tildePath(dbPath))

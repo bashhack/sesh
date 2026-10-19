@@ -39,8 +39,7 @@ const (
 )
 
 // browserRequest is a request from the extension. URL is the tab's, which
-// the extension's background worker reads from the browser, never from
-// the page.
+// the extension reads from the browser (tabs.query), never from the page.
 type browserRequest struct {
 	Type string `json:"type"`
 	URL  string `json:"url,omitempty"`
