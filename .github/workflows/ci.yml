@@ -263,10 +263,10 @@ jobs:
             exit 1
           fi
 
-      # A tag with notes written for it (.github/release-notes/<tag>.md),
-      # such as the first, which has no tag before it to list commits
-      # since, is released with them; another, with the changelog of its
-      # commits since the last tag.
+      # A tag with notes written for it (.github/release-notes/<tag>.md) is
+      # released with them; another, with GoReleaser's changelog of its
+      # commits since the last tag. The first has notes: with no tag
+      # before it, that changelog would be every commit.
       - name: Choose the release notes
         id: notes
         run: |
