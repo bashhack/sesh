@@ -98,7 +98,7 @@ func TestSync_Random2(t *testing.T) {
 				case op < 5:
 					k := keys[r.IntN(len(keys))]
 					to := vault.Key{Kind: k.Kind, Service: fmt.Sprintf("s%d", r.IntN(6)), Username: k.Username}
-					if _, err := c.store.Edit(k, database.EntryEdit{To: &to}); err == nil {
+					if _, err := c.store.Edit(k, &database.EntryEdit{To: &to}); err == nil {
 						logf("%d %s rename %s -> %s", step, c.name, k.Service, to.Service)
 					}
 				case op < 6:

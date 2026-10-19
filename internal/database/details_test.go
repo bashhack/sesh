@@ -77,12 +77,12 @@ func TestEdit_RenameKeepsDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	to := vault.Key{Kind: vault.KindAPIKey, Service: "bank-api"}
-	if _, err := s.Edit(bank, EntryEdit{To: &to}); err != nil {
+	if _, err := s.Edit(bank, &EntryEdit{To: &to}); err != nil {
 		t.Fatal(err)
 	}
 	checkDetailsOf(t, s, to, &d)
 	// A new secret alone leaves them as they are.
-	if _, err := s.Edit(to, EntryEdit{Secret: []byte("sk-2")}); err != nil {
+	if _, err := s.Edit(to, &EntryEdit{Secret: []byte("sk-2")}); err != nil {
 		t.Fatal(err)
 	}
 	checkDetailsOf(t, s, to, &d)
@@ -97,14 +97,14 @@ func TestEdit_NotesBlockASecureNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	to := vault.Key{Kind: vault.KindNote, Service: "bank"}
-	if _, err := s.Edit(bank, EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "has notes, and a secure note can't") {
+	if _, err := s.Edit(bank, &EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "has notes, and a secure note can't") {
 		t.Errorf("Edit to a secure note = %v, want refused", err)
 	}
 	d.Notes = nil
 	if err := s.SetDetails(bank, &d); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Edit(bank, EntryEdit{To: &to}); err != nil {
+	if _, err := s.Edit(bank, &EntryEdit{To: &to}); err != nil {
 		t.Errorf("Edit without notes: %v", err)
 	}
 }
@@ -142,7 +142,7 @@ func TestEdit_DetailsChangedMeanwhile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s2.Close() }) //nolint:errcheck // test cleanup
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}
-	if _, err := s2.Edit(bank, EntryEdit{To: &to}); !errors.Is(err, ErrEntryChanged) {
+	if _, err := s2.Edit(bank, &EntryEdit{To: &to}); !errors.Is(err, ErrEntryChanged) {
 		t.Errorf("Edit = %v, want ErrEntryChanged", err)
 	}
 	checkDetailsOf(t, other, bank, &changed)
@@ -319,7 +319,7 @@ func TestEdit_ChangesDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := "https://new.bank.example"
-	detail, err := s.Edit(bank, EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}, Remove: []string{"account"}}})
+	detail, err := s.Edit(bank, &EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}, Remove: []string{"account"}}})
 	if err != nil || detail != "URL changed, field pin changed, field account removed" {
 		t.Fatalf("Edit = %q, %v", detail, err)
 	}
@@ -328,10 +328,10 @@ func TestEdit_ChangesDetails(t *testing.T) {
 
 	// With a rename to a secure note, the notes must go in the same edit.
 	to := vault.Key{Kind: vault.KindNote, Service: "bank"}
-	if _, err := s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{URL: &url}}); err == nil || !strings.Contains(err.Error(), "a secure note can't have notes") {
+	if _, err := s.Edit(bank, &EntryEdit{To: &to, Details: &vault.DetailsChange{URL: &url}}); err == nil || !strings.Contains(err.Error(), "a secure note can't have notes") {
 		t.Errorf("rename to a note keeping notes = %v, want refused", err)
 	}
-	detail, err = s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{SetNotes: true}})
+	detail, err = s.Edit(bank, &EntryEdit{To: &to, Details: &vault.DetailsChange{SetNotes: true}})
 	if err != nil || detail != "renamed from password/bank and notes removed" {
 		t.Fatalf("rename removing notes = %q, %v", detail, err)
 	}
@@ -339,10 +339,10 @@ func TestEdit_ChangesDetails(t *testing.T) {
 	checkDetailsOf(t, s, to, &want)
 
 	// A change that changes nothing is nothing to do.
-	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{URL: &url}}); err == nil || err.Error() != "nothing to change" {
+	if _, err := s.Edit(to, &EntryEdit{Details: &vault.DetailsChange{URL: &url}}); err == nil || err.Error() != "nothing to change" {
 		t.Errorf("a change to the same URL = %v, want nothing to change", err)
 	}
-	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{Remove: []string{"nope"}}}); err == nil || !strings.Contains(err.Error(), `there's no field "nope" to remove`) {
+	if _, err := s.Edit(to, &EntryEdit{Details: &vault.DetailsChange{Remove: []string{"nope"}}}); err == nil || !strings.Contains(err.Error(), `there's no field "nope" to remove`) {
 		t.Errorf("removing a missing field = %v", err)
 	}
 }
@@ -372,7 +372,7 @@ func TestEdit_ReadableDetailsChangedMeanwhile(t *testing.T) {
 			t.Fatal(err)
 		}
 		url := "https://new.example"
-		if _, err := s2.Edit(bank, EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("1111"), Secret: true}}}}); !errors.Is(err, ErrEntryChanged) {
+		if _, err := s2.Edit(bank, &EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("1111"), Secret: true}}}}); !errors.Is(err, ErrEntryChanged) {
 			t.Errorf("%s changed meanwhile: Edit = %v, want ErrEntryChanged", name, err)
 		}
 		if err := s2.Close(); err != nil {

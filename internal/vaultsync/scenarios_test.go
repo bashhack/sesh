@@ -140,10 +140,10 @@ func TestSync_RenameIntoFreedName(t *testing.T) {
 	}
 	x, other := high, low
 	kc := vault.Key{Kind: vault.KindPassword, Service: "c", Username: "alice"}
-	if _, err := laptop.store.Edit(x, database.EntryEdit{To: &kc}); err != nil {
+	if _, err := laptop.store.Edit(x, &database.EntryEdit{To: &kc}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := laptop.store.Edit(other, database.EntryEdit{To: &x}); err != nil {
+	if _, err := laptop.store.Edit(other, &database.EntryEdit{To: &x}); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("x (uid %s) %s -> c; other (uid %s) %s -> %s", uidOfKey(t, laptop, kc), x.Service, uidOfKey(t, laptop, x), other.Service, x.Service)

@@ -22,7 +22,7 @@ func TestEdit_Rename(t *testing.T) {
 		t.Fatal(err)
 	}
 	to := vault.Key{Kind: vault.KindTOTP, Service: "Bank", Username: "me"} // only the case changes
-	detail, err := s.Edit(old, EntryEdit{To: &to})
+	detail, err := s.Edit(old, &EntryEdit{To: &to})
 	if err != nil || detail != "renamed from totp/bank/me" {
 		t.Fatalf("Edit = %q, %v", detail, err)
 	}
@@ -47,7 +47,7 @@ func TestEdit_SecretAndKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	if detail, err := s.Edit(k, EntryEdit{Secret: []byte("new-secret")}); err != nil || detail != "secret changed" {
+	if detail, err := s.Edit(k, &EntryEdit{Secret: []byte("new-secret")}); err != nil || detail != "secret changed" {
 		t.Fatalf("new secret: %q, %v", detail, err)
 	}
 	after, err := s.Lookup(k)
@@ -55,7 +55,7 @@ func TestEdit_SecretAndKind(t *testing.T) {
 		t.Errorf("update time %v, before %v; want later", after.UpdatedAt, before.UpdatedAt)
 	}
 	to := vault.Key{Kind: vault.KindAPIKey, Service: "bank-api", Username: "ci"}
-	if detail, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("sk-1")}); err != nil || detail != "renamed from password/bank and secret changed" {
+	if detail, err := s.Edit(k, &EntryEdit{To: &to, Secret: []byte("sk-1")}); err != nil || detail != "renamed from password/bank and secret changed" {
 		t.Fatalf("rename and new secret: %q, %v", detail, err)
 	}
 	if secret, err := s.Get(to); err != nil || string(secret) != "sk-1" {
@@ -70,18 +70,18 @@ func TestEdit_Refusals(t *testing.T) {
 	if err := s.Put(other, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Edit(bank, EntryEdit{To: &other}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), "password/other") {
+	if _, err := s.Edit(bank, &EntryEdit{To: &other}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), "password/other") {
 		t.Errorf("onto another entry's name: %v", err)
 	}
 	missing := vault.Key{Kind: vault.KindPassword, Service: "missing"}
-	if _, err := s.Edit(missing, EntryEdit{Secret: []byte("x")}); !errors.Is(err, vault.ErrNotFound) {
+	if _, err := s.Edit(missing, &EntryEdit{Secret: []byte("x")}); !errors.Is(err, vault.ErrNotFound) {
 		t.Errorf("a missing entry: %v", err)
 	}
-	if _, err := s.Edit(bank, EntryEdit{}); err == nil {
+	if _, err := s.Edit(bank, &EntryEdit{}); err == nil {
 		t.Error("an edit that changes nothing succeeded")
 	}
 	bad := vault.Key{Kind: vault.KindPassword, Service: "a/b"}
-	if _, err := s.Edit(bank, EntryEdit{To: &bad}); err == nil {
+	if _, err := s.Edit(bank, &EntryEdit{To: &bad}); err == nil {
 		t.Error("a bad name was accepted")
 	}
 	if secret, err := s.Get(bank); err != nil || string(secret) != "bank-secret" {
@@ -128,7 +128,7 @@ func TestEdit_EntryChangedMeanwhile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s2.Close() }) //nolint:errcheck // test cleanup
-	if _, err := s2.Edit(bank, EntryEdit{Secret: []byte("edited")}); !errors.Is(err, ErrEntryChanged) {
+	if _, err := s2.Edit(bank, &EntryEdit{Secret: []byte("edited")}); !errors.Is(err, ErrEntryChanged) {
 		t.Errorf("Edit = %v, want ErrEntryChanged", err)
 	}
 	if secret, err := other.Get(bank); err != nil || string(secret) != "stored meanwhile" {
@@ -178,7 +178,7 @@ func TestEdit_NameTakenBeforeAndDuring(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, o := openCounting(t, p)
-	if _, err := c.Edit(bank, EntryEdit{To: &taken}); !errors.Is(err, ErrNameTaken) || o.encrypts != 0 {
+	if _, err := c.Edit(bank, &EntryEdit{To: &taken}); !errors.Is(err, ErrNameTaken) || o.encrypts != 0 {
 		t.Errorf("a taken name: %v after %d seals; want ErrNameTaken before any", err, o.encrypts)
 	}
 	later := vault.Key{Kind: vault.KindPassword, Service: "later"}
@@ -187,7 +187,7 @@ func TestEdit_NameTakenBeforeAndDuring(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	if _, err := c.Edit(bank, EntryEdit{To: &later}); !errors.Is(err, ErrNameTaken) {
+	if _, err := c.Edit(bank, &EntryEdit{To: &later}); !errors.Is(err, ErrNameTaken) {
 		t.Errorf("a name taken while sealing: %v, want ErrNameTaken", err)
 	}
 	if got, err := s.Get(later); err != nil || string(got) != "y" {
@@ -201,7 +201,7 @@ func TestEdit_AuditAndNoChange(t *testing.T) {
 	_, s := rekeyVault(t)
 	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}
-	if _, err := s.Edit(bank, EntryEdit{To: &to}); err != nil {
+	if _, err := s.Edit(bank, &EntryEdit{To: &to}); err != nil {
 		t.Fatal(err)
 	}
 	var id, detail string
@@ -211,10 +211,40 @@ func TestEdit_AuditAndNoChange(t *testing.T) {
 	if id != "password/bank-2" || detail != "Edit: renamed from password/bank" {
 		t.Errorf("audit event %q %q", id, detail)
 	}
-	if _, err := s.Edit(to, EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "nothing to change") {
+	if _, err := s.Edit(to, &EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "nothing to change") {
 		t.Errorf("to the same name: %v", err)
 	}
-	if _, err := s.Edit(to, EntryEdit{Secret: []byte{}}); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := s.Edit(to, &EntryEdit{Secret: []byte{}}); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Errorf("an empty secret: %v", err)
+	}
+}
+
+// An AWS profile's entry's MFA device is set, changed and taken out,
+// keeping its other settings; giving the one it has is no change.
+func TestEdit_AWSMFADevice(t *testing.T) {
+	_, s := rekeyVault(t)
+	k := vault.AWSKey("work")
+	code := totp.Params{Issuer: "Amazon Web Services"}
+	if err := s.Save(&vault.Entry{Key: k, Settings: vault.Settings{TOTP: code}}, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		t.Fatal(err)
+	}
+	device := func(arn string) *EntryEdit { return &EntryEdit{AWSMFADevice: &arn} }
+	const arn = "arn:aws:iam::123456789012:mfa/me"
+	for _, step := range []struct{ to, said string }{
+		{arn, "MFA device changed"},
+		{"arn:aws:iam::123456789012:mfa/laptop", "MFA device changed"},
+		{"", "MFA device changed"},
+	} {
+		said, err := s.Edit(k, device(step.to))
+		if err != nil || said != step.said {
+			t.Fatalf("to %q: %q, %v; want %q", step.to, said, err, step.said)
+		}
+		e, err := s.Lookup(k)
+		if err != nil || e.Settings != (vault.Settings{TOTP: code, AWSMFADevice: step.to}) {
+			t.Errorf("after %q: settings %+v, %v", step.to, e.Settings, err)
+		}
+	}
+	if _, err := s.Edit(k, device("")); !errors.Is(err, ErrNothingToChange) {
+		t.Errorf("the device it has: %v; want nothing to change", err)
 	}
 }

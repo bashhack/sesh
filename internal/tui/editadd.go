@@ -165,6 +165,15 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the current key; a key alone gives 6-digit codes every 30s"
 	}
 
+	// An AWS profile's entry (totp/aws/<profile>) names the MFA device
+	// sesh aws sends its codes for; one that has a device, under whatever
+	// name, can change it or take it out.
+	device := m.textInput("MFA device", e.Settings.AWSMFADevice)
+	device.hint = "the authenticator app's ARN in AWS (arn:aws:iam::ACCOUNT:mfa/NAME), for a profile with access keys; empty: sesh asks AWS for it"
+	device.shown = func() bool {
+		return e.Settings.AWSMFADevice != "" || kind() == vault.KindTOTP && name.value() == vault.AWSKey("").Service
+	}
+
 	url := m.textInput("URL", e.URL)
 	folder := m.textInput("folder", e.Folder)
 	tags := m.textInput("tags", strings.Join(e.Tags, ", "))
@@ -195,7 +204,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	fileIn.shown = func() bool { return kind() == vault.KindFile && m.opts.ReadFile != nil }
 
 	title := "Edit " + entryName(e)
-	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, fileIn, url, folder, tags, text, fields})
+	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, device, fileIn, url, folder, tags, text, fields})
 	switch {
 	case adding:
 		title = "Add an entry"
@@ -205,6 +214,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 	f := &form{title: title, inputs: inputs, row: -1}
 	orig := *e
+	var warnedAs vault.Key // the name a rename of an AWS profile's entry was last warned of
 	f.submit = func() tea.Cmd {
 		k := kind()
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
@@ -233,11 +243,22 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		if !adding {
 			c.Key = orig.Key
 		}
+		// An AWS profile's entry is totp/aws/<profile>: under another name,
+		// sesh aws doesn't find it. The first save says so, as sesh edit
+		// asks.
+		if !adding && orig.Key == vault.AWSKey(orig.Username) && c.To != vault.AWSKey(c.To.Username) && warnedAs != c.To {
+			warnedAs = c.To
+			f.err = "This is an AWS profile's MFA entry: as " + c.To.String() + ", sesh aws won't find it. Press Ctrl-S again to rename it anyway."
+			return nil
+		}
 		if u := url.value(); adding && u != "" || !adding && u != orig.URL {
 			c.URL = &u
 		}
 		if fo := folder.value(); adding && fo != "" || !adding && fo != orig.Folder {
 			c.Folder = &fo
+		}
+		if d := device.value(); device.visible() && (adding && d != "" || !adding && d != orig.Settings.AWSMFADevice) {
+			c.MFADevice = &d
 		}
 		var tagList []string
 		for t := range strings.SplitSeq(tags.value(), ",") {

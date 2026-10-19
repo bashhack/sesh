@@ -332,7 +332,7 @@ func TestSyncHistory_SetAt(t *testing.T) {
 		t.Fatal(err)
 	}
 	set2 := set()
-	if _, err := a.Edit(k, EntryEdit{Secret: []byte("pw-3")}); err != nil {
+	if _, err := a.Edit(k, &EntryEdit{Secret: []byte("pw-3")}); err != nil {
 		t.Fatal(err)
 	}
 	rec, _, err := a.SyncRecord(uidOf(t, a, k), "laptop")

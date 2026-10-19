@@ -59,7 +59,7 @@ func TestEntryIDs_KeptThroughChanges(t *testing.T) {
 	}
 	same("an overwrite", gh)
 	renamed := vault.Key{Kind: vault.KindPassword, Service: "github-work", Username: "alice"}
-	if _, err := s.Edit(gh, EntryEdit{To: &renamed}); err != nil {
+	if _, err := s.Edit(gh, &EntryEdit{To: &renamed}); err != nil {
 		t.Fatal(err)
 	}
 	same("a rename", renamed)
@@ -118,11 +118,11 @@ func TestEntryRev_EveryChange(t *testing.T) {
 		{name: "details", do: func() error { return s.SetDetails(k, &vault.Details{URL: "https://github.com", Notes: []byte("n")}) }},
 		{name: "settings", key: code, do: func() error { return s.SetSettings(code, &digits) }},
 		{name: "edit: code settings", key: code, do: func() error {
-			_, err := s.Edit(code, EntryEdit{TOTP: &totp.Params{Digits: 6, Period: 60}})
+			_, err := s.Edit(code, &EntryEdit{TOTP: &totp.Params{Digits: 6, Period: 60}})
 			return err
 		}},
-		{name: "edit: folder", do: func() error { _, err := s.Edit(k, EntryEdit{Folder: &folder}); return err }},
-		{name: "edit: tags", do: func() error { _, err := s.Edit(k, EntryEdit{Tags: &tags}); return err }},
+		{name: "edit: folder", do: func() error { _, err := s.Edit(k, &EntryEdit{Folder: &folder}); return err }},
+		{name: "edit: tags", do: func() error { _, err := s.Edit(k, &EntryEdit{Tags: &tags}); return err }},
 		{name: "move to a folder", do: func() error { _, err := s.MoveToFolder([]vault.Key{k}, "home"); return err }},
 		{name: "rename the folder", do: func() error { _, _, err := s.RenameFolder("home", "house"); return err }},
 		{name: "add a tag", do: func() error { _, err := s.AddTag([]vault.Key{k}, "c"); return err }},
@@ -130,10 +130,10 @@ func TestEntryRev_EveryChange(t *testing.T) {
 		{name: "remove a tag", do: func() error { _, err := s.RemoveTag([]vault.Key{k}, "d"); return err }},
 		{name: "a rename and back", do: func() error {
 			away := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice2"}
-			if _, err := s.Edit(k, EntryEdit{To: &away}); err != nil {
+			if _, err := s.Edit(k, &EntryEdit{To: &away}); err != nil {
 				return err
 			}
-			_, err := s.Edit(away, EntryEdit{To: &k})
+			_, err := s.Edit(away, &EntryEdit{To: &k})
 			return err
 		}},
 		{name: "restore an earlier secret", do: func() error { _, err := s.RestoreVersion(k, 2); return err }},
@@ -259,19 +259,19 @@ func TestEntryRev_SameAgain(t *testing.T) {
 		{name: "the same entry saved whole", do: func() error { return s.SaveWithDetails(e, []byte("one"), d) }},
 		{name: "the same details", do: func() error { return s.SetDetails(k, d) }},
 		{name: "edit: the folder it's in", do: func() error {
-			if _, err := s.Edit(k, EntryEdit{Folder: &folder}); !errors.Is(err, ErrNothingToChange) {
+			if _, err := s.Edit(k, &EntryEdit{Folder: &folder}); !errors.Is(err, ErrNothingToChange) {
 				return fmt.Errorf("want ErrNothingToChange, got %v", err)
 			}
 			return nil
 		}},
 		{name: "edit: the tags it has", do: func() error {
-			if _, err := s.Edit(k, EntryEdit{Tags: &tags, Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
+			if _, err := s.Edit(k, &EntryEdit{Tags: &tags, Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
 				return fmt.Errorf("want ErrNothingToChange, got %v", err)
 			}
 			return nil
 		}},
 		{name: "edit: the same details", do: func() error {
-			_, err := s.Edit(k, EntryEdit{Details: &vault.DetailsChange{Notes: []byte("n"), SetNotes: true}})
+			_, err := s.Edit(k, &EntryEdit{Details: &vault.DetailsChange{Notes: []byte("n"), SetNotes: true}})
 			if err != nil && !errors.Is(err, ErrNothingToChange) {
 				return err
 			}

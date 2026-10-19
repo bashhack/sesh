@@ -109,7 +109,10 @@ type Change struct {
 	URL    *string
 	Folder *string
 	// FileName is a file entry's file's name, given with new content.
-	FileName     *string
+	FileName *string
+	// MFADevice is an AWS profile's entry's MFA device (its ARN), "" for
+	// none, which has sesh ask AWS for it.
+	MFADevice    *string
 	Key, To      vault.Key
 	Secret       []byte
 	Notes        []byte

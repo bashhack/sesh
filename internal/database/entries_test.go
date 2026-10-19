@@ -275,14 +275,14 @@ func TestSameSecretKeepsUpdateTime(t *testing.T) {
 			if err := s.SaveWithDetails(&vault.Entry{Key: k}, []byte("one"), &vault.Details{}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.Edit(k, EntryEdit{Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
+			if _, err := s.Edit(k, &EntryEdit{Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
 				t.Errorf("an edit to the same secret = %v; want nothing to change", err)
 			}
 			if got := updated(); !got.Equal(then) {
 				t.Errorf("after the same secret again: updated %v; want %v", got, then)
 			}
 			to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
-			if what, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil || strings.Contains(what, "secret") {
+			if what, err := s.Edit(k, &EntryEdit{To: &to, Secret: []byte("one")}); err != nil || strings.Contains(what, "secret") {
 				t.Errorf("a rename with the same secret = %q, %v", what, err)
 			}
 			if e, err := s.Lookup(to); err != nil || !e.UpdatedAt.UTC().Equal(then) {
@@ -375,7 +375,7 @@ func TestEditSameSecretOpensOnce(t *testing.T) {
 	o := &openCountingOracle{CryptoOracle: s.oracle}
 	s.oracle = o
 	to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
-	if _, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil {
+	if _, err := s.Edit(k, &EntryEdit{To: &to, Secret: []byte("one")}); err != nil {
 		t.Fatal(err)
 	}
 	if o.opened != 1 {
@@ -384,7 +384,7 @@ func TestEditSameSecretOpensOnce(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233' WHERE service = 'bank2'`); err != nil {
 		t.Fatal(err)
 	}
-	if what, err := s.Edit(to, EntryEdit{Secret: []byte("one")}); err != nil || !strings.Contains(what, "secret changed") {
+	if what, err := s.Edit(to, &EntryEdit{Secret: []byte("one")}); err != nil || !strings.Contains(what, "secret changed") {
 		t.Errorf("replacing a damaged secret = %q, %v", what, err)
 	}
 	if got, err := s.Get(to); err != nil || string(got) != "one" {

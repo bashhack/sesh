@@ -543,7 +543,7 @@ func saveTOTP(store *database.Store, k vault.Key, key []byte, params totp.Params
 		if change == nil {
 			return nil
 		}
-		_, err := store.Edit(k, database.EntryEdit{Details: change})
+		_, err := store.Edit(k, &database.EntryEdit{Details: change})
 		if errors.Is(err, database.ErrNothingToChange) {
 			return nil
 		}

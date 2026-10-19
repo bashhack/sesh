@@ -173,7 +173,7 @@ func TestSync_RestoreThenRenameIntoTaken(t *testing.T) {
 				settleN(t, f, 6, laptop, desktop)
 				restoreHow(t, laptop, paths[0], backup, how)
 				to := vault.Key{Kind: x.Kind, Service: "y", Username: x.Username}
-				if _, err := laptop.store.Edit(x, database.EntryEdit{To: &to}); err != nil {
+				if _, err := laptop.store.Edit(x, &database.EntryEdit{To: &to}); err != nil {
 					t.Fatal(err)
 				}
 				for i := range 5 {
