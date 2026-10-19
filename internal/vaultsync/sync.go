@@ -55,6 +55,10 @@ type Summary struct {
 	// until it has, or they're deleted for good here. Said, but not
 	// something a sync did (Nothing).
 	HeldBack []string
+	// Retype are such entries made here, whose secret typed here the vault
+	// no longer has (forgotten, or trimmed to history.keep): not sent
+	// until it's typed again here. Not something a sync did either.
+	Retype []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
 	Ignored int
@@ -713,7 +717,7 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 	// secret since forgotten or trimmed, the one now taken from the
 	// folder): held back until it's typed again here.
 	if folder == nil && r.Purged.IsZero() && (r.Kind == "" || len(r.Secret) == 0) {
-		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		y.sum.Retype = append(y.sum.Retype, name)
 		return nil
 	}
 	// The forget marks are what's made here: any taken under the old key
@@ -722,10 +726,23 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		return err
 	}
 	if folder != nil && sameEntry(r, folder) && slices.Equal(r.Forgotten, folder.Forgotten) {
+		// Said as set back only when what was agreed here held changes
+		// the folder's hasn't seen: one simply newer is taken. (Counts
+		// can be made up with the old password; they choose only what's
+		// said, not what's kept.)
+		newer := false
+		if base, err := y.store.SyncBase(uid); err == nil && base != nil {
+			newer = folder.Versions.Covers(base.Versions)
+			base.Wipe()
+		}
 		if err := y.apply(uid, rev, folder, hash); err != nil {
 			return err
 		}
-		if !sameEntry(local, folder) {
+		switch {
+		case sameEntry(local, folder):
+		case newer:
+			y.sum.Received = append(y.sum.Received, recordName(uid, folder))
+		default:
 			y.sum.SetBack = append(y.sum.SetBack, name)
 		}
 	} else {
@@ -1308,6 +1325,7 @@ func (s *Summary) String() string {
 	add(s.EarlierKey, "under an earlier key, not taken")
 	add(len(s.SetBack), "set back to the folder's, not sent")
 	add(len(s.HeldBack), "held back until the folder has them under the new key")
+	add(len(s.Retype), "held back until their secret is typed again")
 	add(s.Rewritten, "written again")
 	add(s.Resealed, "sealed again with the new master password's key")
 	add(len(s.Problems), "problems")

@@ -527,8 +527,6 @@ func TestSync_LateSwitchLaterChanges(t *testing.T) {
 	noEvil(t, laptop, desktopNew)
 }
 
-// What was typed here is kept only until another computer's version has
-
 // An entry made under the old key and changed again before the switch is
 // still this computer's own: sent once it takes the change.
 func TestSync_LateSwitchMadeThenChanged(t *testing.T) {
@@ -921,11 +919,11 @@ func TestSync_LateSwitchMadeHereSecretGone(t *testing.T) {
 	cs[2].sync(f)
 	cs[1].sync(f)
 	desktop := takeKey(t, cs[1], laptop, rec, "the new password 1")
-	if s := syncOlder(t, desktop, f); !slices.Equal(s.HeldBack, []string{to.String()}) || len(s.Problems) != 0 {
-		t.Errorf("desktop taking the change: %+v, want bank2 held back, no problem", s)
+	if s := syncOlder(t, desktop, f); !slices.Equal(s.Retype, []string{to.String()}) || len(s.HeldBack)+len(s.Problems) != 0 {
+		t.Errorf("desktop taking the change: %+v, want bank2 held back until its secret is typed again, no problem", s)
 	}
 	desktop.put("bank2", "desk-3")
-	if s := syncOlder(t, desktop, f); len(s.HeldBack) != 0 {
+	if s := syncOlder(t, desktop, f); len(s.HeldBack)+len(s.Retype) != 0 {
 		t.Errorf("desktop, the secret typed again: %+v, want nothing held back", s)
 	}
 	third := takeKey(t, cs[2], laptop, rec, "the new password 1")
@@ -933,5 +931,21 @@ func TestSync_LateSwitchMadeHereSecretGone(t *testing.T) {
 	settleOlder(t, f, laptop, desktop, third)
 	if !slices.Contains(names(laptop), "bank2") {
 		t.Errorf("laptop: %q, want bank2", names(laptop))
+	}
+}
+
+// A plain newer change from the other computers, made under the new key,
+// is said as taken, not as set back.
+func TestSync_LateSwitchNewerIsTaken(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f, gh, rec, _, _ := lateWorld(t)
+	laptop.put("github", "pw-2")
+	syncOlder(t, laptop, f)
+	desktopNew, s := switchDesktop(t, laptop, desktop, f, rec)
+	if len(s.SetBack) != 0 || !slices.Equal(s.Received, []string{gh.String()}) {
+		t.Errorf("desktop taking the change: %+v, want github taken, nothing set back", s)
+	}
+	if got := desktopNew.secret(gh); got != "pw-2" {
+		t.Errorf("desktop: %q, want pw-2", got)
 	}
 }

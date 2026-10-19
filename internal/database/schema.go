@@ -144,9 +144,9 @@ func migrateV1(tx *sql.Tx) error {
 			left_key  INTEGER NOT NULL DEFAULT 0
 		)`,
 		// What this computer's user typed in each entry it sent, by the
-		// count it was sent with (syncfolder.Typed), sealed: kept until
-		// another computer's version has seen it, so a master password
-		// change taken here makes it again on the folder's version.
+		// count it was sent with (syncfolder.Typed), sealed: kept, while
+		// the vault still has it, until a master password change taken
+		// here makes it again on the folder's version.
 		`CREATE TABLE sync_typed (
 			uid    TEXT NOT NULL,
 			n      INTEGER NOT NULL,
