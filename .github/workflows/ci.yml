@@ -125,10 +125,17 @@ jobs:
           path: ./build/sesh
           if-no-files-found: error
 
-  # Its own job so it runs beside the coverage run, not after it.
+  # Its own jobs so they run beside the coverage run, not after it: three,
+  # so the slowest package, sesh/cmd/sesh, whose tests mostly can't run in
+  # parallel (they set environment variables), is split between two by
+  # test name (every other one, sorted), and the rest run in the third.
   race:
-    name: Test with -race
+    name: Test with -race (${{ matrix.part }})
     runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [commands 1 of 2, commands 2 of 2, the rest]
     steps:
       - uses: actions/checkout@v4
 
@@ -142,10 +149,30 @@ jobs:
         run: go mod download
 
       - name: Run tests with race detection
+        env:
+          PART: ${{ matrix.part }}
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOEXPERIMENT=$RACE_GOEXPERIMENT GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off $(go list ./... | grep -v /scripts)
+          CMD=github.com/bashhack/sesh/sesh/cmd/sesh
+          case "$PART" in
+            "the rest")
+              PKGS=$(go list ./... | grep -v /scripts | grep -vx "$CMD")
+              RUN=.
+              ;;
+            "commands "*)
+              # Its tests, every other one: the first half takes the odd
+              # lines, the second the even.
+              HALF=${PART#commands }; HALF=${HALF%% *}
+              NAMES=$(grep -ho '^func \(Test\|Fuzz\|Example\)[A-Za-z0-9_]*' sesh/cmd/sesh/*_test.go | sed 's/^func //' | grep -vx TestMain | sort | awk -v h="$HALF" 'NR % 2 == h % 2' | paste -sd'|' -)
+              [ -n "$NAMES" ] || { echo "no tests found for $PART"; exit 1; }
+              echo "$PART: $(echo "$NAMES" | tr '|' '\n' | wc -l | tr -d ' ') tests"
+              PKGS=$CMD
+              RUN="^($NAMES)\$"
+              ;;
+            *) echo "unknown part $PART"; exit 1 ;;
+          esac
+          GOEXPERIMENT=$RACE_GOEXPERIMENT GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off -run "$RUN" $PKGS
 
   test-linux:
     name: Test (Linux)
