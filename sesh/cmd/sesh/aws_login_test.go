@@ -295,3 +295,19 @@ func TestAWSLogin_ShellConfig(t *testing.T) {
 		}
 	}
 }
+
+// A profile sesh has no MFA key for says so before the sign-in, copying
+// nothing.
+func TestAWSLogin_NoKeySaysSo(t *testing.T) {
+	loginVault(t)
+	f := &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}}
+	stubLogin(t, f)
+	app, copied := cliApp("", true)
+	_, errOut, err := runCLI(app, runAWS, "--profile", "personal", "--no-subshell")
+	if err != nil {
+		t.Fatalf("sesh aws: %v\n%s", err, errOut)
+	}
+	if len(*copied) != 0 || !strings.Contains(errOut, "sesh has no MFA key for profile personal (sesh aws setup --profile personal stores one)") {
+		t.Errorf("copied %q\n%s", *copied, errOut)
+	}
+}

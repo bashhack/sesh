@@ -25,9 +25,13 @@ func isAWSEntry(e *vault.Entry) bool { return e.Key == vault.AWSKey(e.Username) 
 // awsSignIn signs in to AWS with the profile e is the MFA entry of, as
 // sesh aws does, over a panel that waits for it (Esc leaves it, and the
 // app stays); once it's signed in, the app ends, and the shell opens.
-func (m *Model) awsSignIn(e *vault.Entry) tea.Cmd {
-	k, epoch, sign := e.Key, m.epoch, m.opts.AWSSignIn
-	ov := &overlay{kind: panelNotice, title: "AWS: profile " + e.Username, loading: true,
+func (m *Model) awsSignIn(e *vault.Entry) tea.Cmd { return m.awsSignInAs(e.Key) }
+
+// awsSignInAs signs in with the profile whose MFA entry is, or would be,
+// k, as awsSignIn does.
+func (m *Model) awsSignInAs(k vault.Key) tea.Cmd {
+	epoch, sign := m.epoch, m.opts.AWSSignIn
+	ov := &overlay{kind: panelNotice, title: "AWS: " + awsProfileName(profileOf(k)), loading: true,
 		question: "Signing in to AWS, as sesh aws does… Esc leaves it, and the app stays open."}
 	m.ov = ov
 	// What the sign-in reads of the vault is read with it open; the
@@ -67,6 +71,41 @@ func (m *Model) awsSignedIn(msg *awsSignedInMsg) tea.Cmd {
 	}
 	m.then = msg.shell
 	return tea.Quit
+}
+
+// profileOf is the AWS profile whose MFA entry is k, "" for the default.
+func profileOf(k vault.Key) string {
+	if k == vault.AWSKey("") {
+		return ""
+	}
+	return k.Username
+}
+
+// openAWSSignIn asks which AWS CLI profile to sign in with, as sesh aws
+// --profile does, whether or not sesh has an MFA key for it.
+func (m *Model) openAWSSignIn() tea.Cmd {
+	m.ov = nil
+	profile := m.textInput("profile", "")
+	profile.hint = "the AWS CLI profile, as sesh aws --profile names it; empty for the default profile"
+	f := &form{title: "Sign in to AWS", inputs: []*input{profile}, row: -1, enterDone: "sign in",
+		note: "Signs in with an AWS CLI profile, as sesh aws does, and opens a shell with it once the app ends. Without an MFA key in sesh for the profile (set up AWS MFA… stores one), nothing is copied: if the sign-in asks for an MFA code, it's your MFA device's."}
+	f.submit = func() tea.Cmd {
+		if err := vault.CheckName("AWS profile", profile.value()); err != nil {
+			f.err = err.Error()
+			return nil
+		}
+		k := vault.AWSKey(profile.value())
+		f.wipe()
+		m.form = nil
+		return m.awsSignInAs(k)
+	}
+	f.focusInput(0)
+	m.form = f
+	if setup := m.opts.AWSSetup; setup != nil {
+		epoch := m.epoch
+		return func() tea.Msg { return awsProfilesMsg{names: setup.Profiles(), in: profile, epoch: epoch} }
+	}
+	return nil
 }
 
 // Then is what the app has left to do once it has ended: the AWS shell to

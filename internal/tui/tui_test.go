@@ -4111,3 +4111,31 @@ func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
 		t.Errorf("a replaced key kept in the history: told %v", s.inHistory)
 	}
 }
+
+// Ctrl-G's sign in to AWS… asks the profile (the AWS CLI's offered) and
+// signs in with it whether or not sesh has its MFA entry; the default
+// profile's entry is totp/aws/default.
+func TestAWSSignInFromTheMenu(t *testing.T) {
+	var asked []vault.Key
+	a := newApp(t, newFake(), Options{AWSSetup: &fakeAWSSetup{}, AWSSignIn: func(_ Vault, k vault.Key) (func() (func(func()) error, error), error) {
+		asked = append(asked, k)
+		return func() (func(func()) error, error) { return func(func()) error { return nil }, nil }, nil
+	}})
+	a.press("ctrl+g", "w")
+	if a.form == nil || a.form.title != "Sign in to AWS" || !slices.Equal(a.form.inputs[0].offers, []string{"work", "home"}) {
+		t.Fatalf("the form:\n%s", a.screen())
+	}
+	a.press("work/x", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, `contains "/"`) || len(asked) != 0 {
+		t.Fatalf("a bad name: %q, asked %v", a.form.err, asked)
+	}
+	a.press("ctrl+u", "personal", "enter")
+	if !a.quit || a.Then() == nil || len(asked) != 1 || asked[0] != vault.AWSKey("personal") {
+		t.Fatalf("signed in: quit %v, asked %v\n%s", a.quit, asked, a.screen())
+	}
+	b := newApp(t, newFake(), Options{AWSSignIn: a.opts.AWSSignIn})
+	b.press("ctrl+g", "w", "enter")
+	if len(asked) != 2 || asked[1] != vault.AWSKey("") {
+		t.Errorf("the default profile: asked %v", asked)
+	}
+}

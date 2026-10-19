@@ -179,6 +179,9 @@ func (m *Model) seshItems() []item {
 	if m.opts.AWSSetup != nil {
 		items = append(items, item{key: "m", label: "set up AWS MFA…", run: m.openAWSSetup})
 	}
+	if m.opts.AWSSignIn != nil {
+		items = append(items, item{key: "w", label: "sign in to AWS…", run: m.openAWSSignIn})
+	}
 	items = append(items, []item{
 		{key: "r", label: "health report…", run: m.openHealth},
 		{key: ",", label: "settings and safety…", run: m.openSettings},
