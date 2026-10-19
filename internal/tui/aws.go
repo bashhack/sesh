@@ -30,10 +30,25 @@ func (m *Model) awsSignIn(e *vault.Entry) tea.Cmd {
 	ov := &overlay{kind: panelNotice, title: "AWS: profile " + e.Username, loading: true,
 		question: "Signing in to AWS, as sesh aws does… Esc leaves it, and the app stays open."}
 	m.ov = ov
-	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		shell, err := sign(v, k)
-		return awsSignedInMsg{err: err, shell: shell, on: ov, epoch: epoch}
+	// What the sign-in reads of the vault is read with it open; the
+	// sign-in itself, talking to AWS, runs with it let go, so neither a
+	// lock nor quitting waits for AWS.
+	var signIn func() (func(func()) error, error)
+	read := m.read(func(v Vault, _ func() bool) tea.Msg {
+		s, err := sign(v, k)
+		if err != nil {
+			return awsSignedInMsg{err: err, on: ov, epoch: epoch}
+		}
+		signIn = s
+		return nil
 	})
+	return func() tea.Msg {
+		if msg := read(); msg != nil || signIn == nil {
+			return msg
+		}
+		shell, err := signIn()
+		return awsSignedInMsg{err: err, shell: shell, on: ov, epoch: epoch}
+	}
 }
 
 // awsSignedIn ends the app for the shell, or says why it isn't signed in.

@@ -78,8 +78,16 @@ func TestUI_AWSSignIn(t *testing.T) {
 	u := newUIVault(store)
 	defer u.Close() //nolint:errcheck // test cleanup
 	app := agentTestApp()
+	// signIn is the sign-in for k, both parts of it.
+	signIn := func(k vault.Key) (func(func()) error, error) {
+		s, err := uiAWSSignIn(app, u, k)
+		if err != nil {
+			return nil, err
+		}
+		return s()
+	}
 	for _, k := range []vault.Key{vault.AWSKey("work"), vault.AWSKey("")} {
-		shell, err := uiAWSSignIn(app, u, k)
+		shell, err := signIn(k)
 		if err != nil || shell == nil {
 			t.Fatalf("%s: %v", k, err)
 		}
@@ -88,20 +96,34 @@ func TestUI_AWSSignIn(t *testing.T) {
 		t.Errorf("sessions asked for %q, want work and the default profile", f.profiles)
 	}
 	f.err = errors.New("aws sts get-session-token: AccessDenied")
-	if shell, err := uiAWSSignIn(app, u, vault.AWSKey("work")); shell != nil || err == nil || !strings.Contains(err.Error(), "AccessDenied") {
+	if shell, err := signIn(vault.AWSKey("work")); shell != nil || err == nil || !strings.Contains(err.Error(), "AccessDenied") {
 		t.Errorf("AWS refusing: %v", err)
 	}
 	stubSTS(t, f, aws.KindRole)
-	if _, err := uiAWSSignIn(app, u, vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "assumes a role") {
+	if _, err := signIn(vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "assumes a role") {
 		t.Errorf("a role: %v", err)
 	}
 	stubSTS(t, f, aws.KindLogin)
 	f.profiles = nil
-	if shell, err := uiAWSSignIn(app, u, vault.AWSKey("work")); err != nil || shell == nil || len(f.profiles) != 0 {
+	if shell, err := signIn(vault.AWSKey("work")); err != nil || shell == nil || len(f.profiles) != 0 {
 		t.Errorf("aws login: %v; sessions asked for %q", err, f.profiles)
 	}
+	// The sign-in talks to AWS with the vault closed: what it needs is
+	// read first.
+	stubSTS(t, f, "")
+	s, err := uiAWSSignIn(app, u, vault.AWSKey("work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.err = nil
+	if err := u.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if shell, err := s(); err != nil || shell == nil {
+		t.Errorf("signed in with the vault closed: %v", err)
+	}
 	t.Setenv("SESH_ACTIVE", "1")
-	if _, err := uiAWSSignIn(app, u, vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "shell sesh opened") {
+	if _, err := signIn(vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "shell sesh opened") {
 		t.Errorf("in a sesh shell: %v", err)
 	}
 }

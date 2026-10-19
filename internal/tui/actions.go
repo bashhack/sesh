@@ -217,7 +217,8 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if ov.kind == panelNotice {
-		if k == "enter" {
+		// While it waits, only Esc leaves it.
+		if k == "enter" && !ov.loading {
 			m.ov = ov.back
 		}
 		return nil

@@ -269,13 +269,15 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return uiTakeKeyChange(settingsNow(cfg), current, next)
 		},
 		KeyChangeNote: func(v tui.Vault) string { return uiKeyChangeNote(settingsNow(cfg), v) },
-		AWSSignIn:     func(v tui.Vault, k vault.Key) (func(func()) error, error) { return uiAWSSignIn(app, v, k) },
-		RenewBackups:  func() (string, error) { return uiRenewBackups(dbPath) },
-		Backups:       func() (tui.Backups, error) { return uiBackups(dbPath) },
-		BackUp:        func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
-		DeleteBackup:  func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
-		PlanRestore:   func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
-		Restore:       func(path string) (string, error) { return uiRestore(dbPath, path) },
+		AWSSignIn: func(v tui.Vault, k vault.Key) (func() (func(func()) error, error), error) {
+			return uiAWSSignIn(app, v, k)
+		},
+		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
+		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
+		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
+		DeleteBackup: func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
+		PlanRestore:  func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
+		Restore:      func(path string) (string, error) { return uiRestore(dbPath, path) },
 		// Settings read now: sync.dir may have changed since the app started.
 		Recovery:       func() (tui.Recovery, error) { return uiRecovery(settingsNow(cfg)) },
 		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(settingsNow(cfg)) },

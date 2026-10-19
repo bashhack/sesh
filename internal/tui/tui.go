@@ -397,12 +397,14 @@ type Options struct {
 	// the new one ("" for nothing). nil: not offered.
 	TakeKeyChange func(current, next []byte) (Changed, error)
 	KeyChangeNote func(v Vault) string
-	// AWSSignIn signs in to AWS with the profile whose MFA entry k is, as
-	// sesh aws --profile does, as far as it goes with the app open, and
-	// returns the shell to open once the app has ended; release, called
-	// once that shell no longer needs the vault, before it starts, lets
-	// sesh lock (ui.lock_on_quit). nil: not offered.
-	AWSSignIn func(v Vault, k vault.Key) (shell func(release func()) error, err error)
+	// AWSSignIn starts signing in to AWS with the profile whose MFA entry
+	// k is, as sesh aws --profile does: it reads what it needs of v, and
+	// returns the sign-in, which runs once the vault's let go, as far as
+	// it goes with the app open, and gives the shell to open once the app
+	// has ended; release, called once that shell no longer needs the
+	// vault, before it starts, lets sesh lock (ui.lock_on_quit). nil: not
+	// offered.
+	AWSSignIn func(v Vault, k vault.Key) (signIn func() (shell func(release func()) error, err error), err error)
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -1164,6 +1166,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	}
 	m.wipe()
 	m.epoch++
+	m.then = nil // a shell signed in for, not yet opened
 	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
 	m.checking = false
 	m.editing = vault.Key{}
