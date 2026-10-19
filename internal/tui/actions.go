@@ -221,8 +221,9 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.endImport()
 		}
 		m.ov = ov.back
-		if ov.aws != nil && (ov.back == nil || ov.back.aws == nil) {
-			// Left: the AWS setup ends, its last step said.
+		if ov.aws != nil && !ov.loading && (ov.back == nil || ov.back.aws == nil) {
+			// Left: the AWS setup ends, its last step said. A save under
+			// way still says how it went.
 			m.endAWSSetup()
 		}
 		return nil

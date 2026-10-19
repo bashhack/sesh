@@ -4036,6 +4036,32 @@ func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
 	if sc := a.screen(); !strings.Contains(sc, "✅ set up work") {
 		t.Fatalf("the device saved after a change:\n%s", sc)
 	}
+	// Esc while the device saves: how it went is still said.
+	a.press("enter")
+	a.press("ctrl+g", "m", "esc-test", "enter")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s", "enter")
+	st := a.awsSet
+	cmd := a.awsSaveDevice(st, "arn:aws:iam::123456789012:mfa/sesh")
+	a.press("esc")
+	a.run(cmd)
+	if sc := a.screen(); !strings.Contains(sc, "✅ set up esc-test") {
+		t.Fatalf("Esc while the device saved:\n%s", sc)
+	}
+	a.press("enter")
+	// A lock between the key's save and its reply says it's kept.
+	e := newApp(t, f, Options{AWSSetup: s})
+	e.press("ctrl+g", "m", "mid-save", "enter")
+	e.focusOn("MFA key, or otpauth:// link")
+	e.press(seed)
+	_, next := e.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	_, save := e.Update(next()) // the key read; its save runs, its reply held
+	saved := save()
+	e.lock("sesh locked: idle")
+	e.Update(saved)
+	if !strings.Contains(e.lockedWhy, "the MFA key is saved, as totp/aws/mid-save") {
+		t.Errorf("locked mid-save: %q", e.lockedWhy)
+	}
 
 	// A lock over the codes says the key's saved.
 	a.press("enter")
@@ -4052,7 +4078,7 @@ func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	s.check = func() { close(started); <-release }
 	b.press("ctrl+g", "m", "work")
-	cmd := b.form.submit()
+	cmd = b.form.submit()
 	got := make(chan tea.Msg, 1)
 	go func() { got <- cmd() }()
 	<-started

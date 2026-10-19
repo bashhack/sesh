@@ -55,7 +55,7 @@ func TestUI_AWSSetup(t *testing.T) {
 	if err != nil || p.Account != "123456789012" || !strings.Contains(p.Done, "AWS MFA is set up for profile work") {
 		t.Errorf("work: %+v, %v", p, err)
 	}
-	if e, keeps, err := s.Existing(u, "work"); err != nil || e == nil || e.Key != vault.AWSKey("work") || keeps != (store.HistoryKeep() > 0) {
+	if e, keeps, err := s.Existing(u, "work"); err != nil || e == nil || e.Key != vault.AWSKey("work") || !keeps {
 		t.Errorf("work's entry: %+v, keeps %v, %v", e, keeps, err)
 	}
 	if e, _, err := s.Existing(u, "new"); err != nil || e != nil {

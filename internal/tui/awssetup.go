@@ -368,7 +368,8 @@ func (m *Model) awsKeyRead(msg *awsKeyMsg) tea.Cmd {
 		f.err = "Not saved: " + msg.err.Error()
 		return nil
 	}
-	st.key, st.fromEntry = msg.key, msg.fromEntry
+	// From here the key may be in the vault: a lock says so.
+	st.key, st.fromEntry, st.saved = msg.key, msg.fromEntry, true
 	c := &Change{To: st.k, Secret: bytes.Clone(msg.key), Folder: msg.folder, Tags: msg.tags, TagsSet: true}
 	if st.p.Existing != nil {
 		// The device is found again, for the new key.
@@ -398,10 +399,10 @@ func (m *Model) awsKeySaved(msg *awsKeySavedMsg) tea.Cmd {
 		return m.lock(lockedReason(msg.err))
 	case msg.err != nil:
 		st.wipe()
+		st.saved = false
 		f.err = "Not saved: " + msg.err.Error()
 		return nil
 	}
-	st.saved = true
 	f.wipe()
 	m.form = nil
 	m.forget(st.k)
