@@ -637,6 +637,7 @@ func (m *Model) Close() {
 		m.v.close()
 		m.v = nil
 	}
+	m.endAWSSetup()
 	for _, g := range m.shut {
 		g.close()
 	}
@@ -673,7 +674,6 @@ func (m *Model) wipe() {
 	clear(m.notesFailed)
 	clear(m.wraps)
 	m.hide()
-	m.endAWSSetup()
 	// A reveal still being read when this runs never comes back.
 	m.revealing = false
 }
@@ -1053,7 +1053,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 				// stays, to say what it did.
 				return m.reread()
 			}
-			if m.ov != nil {
+			// The AWS setup's panels are about what's typed and AWS,
+			// not the entries: they stay.
+			if m.ov != nil && (m.ov.aws == nil || m.ov.aws != m.awsSet) {
 				m.ov = nil
 				if msg.didSync {
 					m.sayBad("A sync took changes from another computer; open the actions again.")
@@ -1178,6 +1180,11 @@ func lockedReason(err error) string {
 // the vault is closed once the reads still running end.
 func (m *Model) lock(why string) tea.Cmd {
 	m.lastSaid, m.lastSaidAt = nil, time.Time{}
+	// An AWS setup that saved its key says what's kept, and what to do.
+	if st := m.awsSet; st != nil && st.saved {
+		why += " " + m.awsLeft(st, "Locked before the setup was done").question
+	}
+	m.endAWSSetup()
 	var closing tea.Cmd
 	if m.v != nil {
 		closing = m.v.shut()

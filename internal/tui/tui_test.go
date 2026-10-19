@@ -3799,22 +3799,31 @@ func TestAWSSignInLetsTheVaultGo(t *testing.T) {
 type fakeAWSSetup struct {
 	checkErr, devicesErr error
 	existing             *vault.Entry
+	check                func() // run as Check asks AWS
 	kind                 string
-	devices              []string
 	keys                 []string // the keys ReadKey or FromEntry gave
-	codes                int      // codes made
+	inHistory            []bool   // what each KeyOnly was told
+	devices              []string
+	codes                int  // codes made
+	noHistory            bool // a key replaced isn't kept
 }
 
 func (s *fakeAWSSetup) Profiles() []string { return []string{"work", "home"} }
-func (s *fakeAWSSetup) Check(_ Vault, profile string) (AWSProfile, error) {
+func (s *fakeAWSSetup) Check(profile string) (AWSProfile, error) {
+	if s.check != nil {
+		s.check()
+	}
 	if s.checkErr != nil {
 		return AWSProfile{}, s.checkErr
 	}
-	p := AWSProfile{Profile: profile, Kind: s.kind, Existing: s.existing, KeepsHistory: true, Done: "✅ set up " + profile}
+	p := AWSProfile{Profile: profile, Kind: s.kind, Done: "✅ set up " + profile}
 	if s.kind == "" {
 		p.Identity, p.Account = "arn:aws:iam::123456789012:user/alice", "123456789012"
 	}
 	return p, nil
+}
+func (s *fakeAWSSetup) Existing(Vault, string) (*vault.Entry, bool, error) {
+	return s.existing, !s.noHistory, nil
 }
 func (s *fakeAWSSetup) ReadKey(typed []byte) ([]byte, error) {
 	if string(typed) != seed {
@@ -3838,7 +3847,8 @@ func (s *fakeAWSSetup) CheckDevice(arn, _ string) error {
 	}
 	return nil
 }
-func (s *fakeAWSSetup) KeyOnly(k vault.Key, _ bool, why error) string {
+func (s *fakeAWSSetup) KeyOnly(k vault.Key, inHistory bool, why error) string {
+	s.inHistory = append(s.inHistory, inHistory)
 	return why.Error() + "; the MFA key is saved, as " + k.String()
 }
 
@@ -3986,5 +3996,92 @@ func TestAWSSetupReplaceAndFromEntry(t *testing.T) {
 	}
 	if sc := a.screen(); s.codes != 0 || !strings.Contains(sc, "✅ set up work") {
 		t.Errorf("from an entry, for aws login: codes %d\n%s", s.codes, sc)
+	}
+}
+
+// Another command changing the vault mid-setup leaves each step working;
+// a lock once the key's saved says what's kept; AWS is asked with the
+// vault let go; with history.keep 0, replacing a key says it's lost.
+func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
+	f := newFake()
+	s := &fakeAWSSetup{devices: []string{"arn:aws:iam::123456789012:mfa/sesh"}}
+	a := newApp(t, f, Options{AWSSetup: s})
+	changed := func(what string) {
+		t.Helper()
+		f.changed = true
+		a.tick(time.Second)
+		if a.awsSet == nil {
+			t.Fatalf("%s: the vault changing ended the setup:\n%s", what, a.screen())
+		}
+	}
+	a.press("ctrl+g", "m", "work", "enter")
+	changed("the key's form")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s")
+	if sc := a.screen(); len(f.saves) != 1 || !strings.Contains(sc, "MFA code 1:") {
+		t.Fatalf("saving after a change:\n%s", sc)
+	}
+	changed("the codes")
+	if sc := a.screen(); !strings.Contains(sc, "MFA code 1:") {
+		t.Fatalf("the codes closed on a change:\n%s", sc)
+	}
+	a.press("enter")
+	changed("the devices")
+	if sc := a.screen(); !strings.Contains(sc, "mfa/sesh") {
+		t.Fatalf("the devices closed on a change:\n%s", sc)
+	}
+	a.press("m")
+	changed("the ARN's form")
+	a.press("arn:aws:iam::123456789012:mfa/typed", "enter")
+	if sc := a.screen(); !strings.Contains(sc, "✅ set up work") {
+		t.Fatalf("the device saved after a change:\n%s", sc)
+	}
+
+	// A lock over the codes says the key's saved.
+	a.press("enter")
+	a.press("ctrl+g", "m", "home", "enter")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s")
+	a.lock("sesh locked: idle")
+	if !strings.Contains(a.lockedWhy, "the MFA key is saved, as totp/aws/home") || s.inHistory[len(s.inHistory)-1] {
+		t.Errorf("locked once the key's saved: %q, in history %v", a.lockedWhy, s.inHistory)
+	}
+
+	// AWS is asked with the vault let go: closing it doesn't wait.
+	b := newApp(t, f, Options{AWSSetup: s})
+	started, release := make(chan struct{}), make(chan struct{})
+	s.check = func() { close(started); <-release }
+	b.press("ctrl+g", "m", "work")
+	cmd := b.form.submit()
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+	<-started
+	g, closed := b.v, make(chan struct{})
+	go func() { g.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the vault waited for AWS")
+	}
+	close(release)
+	<-got
+	s.check = nil
+
+	// history.keep 0: replacing a key says the one there is lost; the key
+	// saved, a lock says it isn't in the history.
+	s.existing, s.noHistory = &vault.Entry{Key: vault.AWSKey("work")}, true
+	c := newApp(t, f, Options{AWSSetup: s})
+	c.press("ctrl+g", "m", "work", "enter")
+	if sc := c.screen(); !strings.Contains(sc, "history.keep is 0") || c.ov == nil || !c.ov.danger {
+		t.Fatalf("history.keep 0:\n%s", sc)
+	}
+	s.noHistory = false
+	d := newApp(t, f, Options{AWSSetup: s})
+	d.press("ctrl+g", "m", "work", "enter", "wait", "y")
+	d.focusOn("MFA key, or otpauth:// link")
+	d.press(seed, "ctrl+s")
+	d.lock("sesh locked: idle")
+	if !s.inHistory[len(s.inHistory)-1] {
+		t.Errorf("a replaced key kept in the history: told %v", s.inHistory)
 	}
 }

@@ -22,8 +22,11 @@ type AWSSetup interface {
 	// Check checks profile ("" for the default) can be set up, as sesh aws
 	// setup does before it asks for the key: the AWS CLI is there, the
 	// name, how it signs in, and, for a profile with access keys, who it
-	// signs in as, AWS asked.
-	Check(v Vault, profile string) (AWSProfile, error)
+	// signs in as, AWS asked. It reads nothing of the vault.
+	Check(profile string) (AWSProfile, error)
+	// Existing is the entry v has for profile already, nil for none, and
+	// whether a key replaced is kept in its history.
+	Existing(v Vault, profile string) (e *vault.Entry, keepsHistory bool, err error)
 	// ReadKey is the MFA key typed, or an otpauth:// link's, refusing one
 	// that doesn't make AWS's codes. The caller wipes both.
 	ReadKey(typed []byte) ([]byte, error)
@@ -71,6 +74,7 @@ type awsSetting struct {
 	k         vault.Key
 	key       []byte
 	fromEntry bool
+	saved     bool // the key is in the vault
 }
 
 // wipe drops the key held.
@@ -154,22 +158,37 @@ func (m *Model) openAWSSetup() tea.Cmd {
 	f.submit = func() tea.Cmd {
 		name := profile.value()
 		f.saving, f.err, f.working = true, "", "Checking "+awsProfileName(name)+"…"
-		return m.read(func(v Vault, _ func() bool) tea.Msg {
-			p, err := setup.Check(v, name)
-			msg := awsCheckedMsg{p: p, err: err, f: f, epoch: epoch}
-			if err == nil {
-				// The entries that could give the key, to offer; none
-				// when they can't be listed.
-				if found, _, err := v.Search(""); err == nil {
-					for i := range found {
-						if k := found[i].Key; k.Kind == vault.KindTOTP && k != vault.AWSKey(name) {
-							msg.totps = append(msg.totps, k.String())
-						}
+		// AWS is asked first, with the vault let go, so neither a lock
+		// nor quitting waits for it; then what the vault has.
+		var msg awsCheckedMsg
+		read := m.read(func(v Vault, _ func() bool) tea.Msg {
+			e, keeps, err := setup.Existing(v, name)
+			if err != nil {
+				return awsCheckedMsg{err: err, f: f, epoch: epoch}
+			}
+			msg.p.Existing, msg.p.KeepsHistory = e, keeps
+			// The entries that could give the key, to offer; none when
+			// they can't be listed.
+			if found, _, err := v.Search(""); err == nil {
+				for i := range found {
+					if k := found[i].Key; k.Kind == vault.KindTOTP && k != vault.AWSKey(name) {
+						msg.totps = append(msg.totps, k.String())
 					}
 				}
 			}
-			return msg
+			return nil
 		})
+		return func() tea.Msg {
+			p, err := setup.Check(name)
+			if err != nil {
+				return awsCheckedMsg{err: err, f: f, epoch: epoch}
+			}
+			msg = awsCheckedMsg{p: p, f: f, epoch: epoch}
+			if failed := read(); failed != nil {
+				return failed
+			}
+			return msg
+		}
 	}
 	f.focusInput(0)
 	m.form = f
@@ -203,7 +222,7 @@ func (m *Model) awsChecked(msg *awsCheckedMsg) tea.Cmd {
 		question = "sesh already has an MFA key for " + awsProfileName(msg.p.Profile) + ". Replace it? history.keep is 0, so the key it has now won't be kept: if AWS doesn't finish adding the new device, the old key is gone."
 	}
 	m.ov = m.confirm(nil, "Set up AWS MFA", question, func() tea.Cmd { return m.awsKeyForm(st, msg.totps) })
-	m.ov.danger = !msg.p.KeepsHistory
+	m.ov.danger, m.ov.aws = !msg.p.KeepsHistory, st
 	return nil
 }
 
@@ -357,11 +376,14 @@ func (m *Model) awsKeyRead(msg *awsKeyMsg) tea.Cmd {
 		c.Key, c.MFADevice = st.k, &none
 	}
 	epoch := m.epoch
-	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		defer c.Wipe()
+	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		_, err := v.Save(c)
 		return awsKeySavedMsg{err: err, f: f, st: st, epoch: epoch}
 	})
+	return func() tea.Msg {
+		defer c.Wipe() // saved, or not: the app locked before the save began
+		return read()
+	}
 }
 
 // awsKeySaved goes on to the codes AWS asks for, once the key's saved.
@@ -379,6 +401,7 @@ func (m *Model) awsKeySaved(msg *awsKeySavedMsg) tea.Cmd {
 		f.err = "Not saved: " + msg.err.Error()
 		return nil
 	}
+	st.saved = true
 	f.wipe()
 	m.form = nil
 	m.forget(st.k)
@@ -404,7 +427,7 @@ func (m *Model) awsCodes(st *awsSetting) {
 	if st.p.Kind == "SSO" {
 		said = "The code, and the next, for the page:\n\n   " + first + ", then " + second + "\n\nEnter what it asks for, and finish adding the device there."
 	}
-	m.ov = &overlay{kind: panelAWSCodes, title: "AWS MFA codes for " + awsProfileName(st.p.Profile), question: said}
+	m.ov = &overlay{kind: panelAWSCodes, title: "AWS MFA codes for " + awsProfileName(st.p.Profile), question: said, aws: st}
 }
 
 // awsLeft is what's said of a setup left once the key was saved.
@@ -453,7 +476,7 @@ func (m *Model) awsAfterCodes(st *awsSetting) tea.Cmd {
 // the one just added from.
 func (m *Model) awsListDevices(st *awsSetting) tea.Cmd {
 	ov := &overlay{kind: panelMenu, title: "MFA device for " + awsProfileName(st.p.Profile), loading: true, busy: "Asking AWS for the user's authenticator apps…",
-		back: m.awsLeft(st, "No MFA device was chosen")}
+		back: m.awsLeft(st, "No MFA device was chosen"), aws: st}
 	m.ov = ov
 	setup, epoch, profile := m.opts.AWSSetup, m.epoch, st.p.Profile
 	return func() tea.Msg {
@@ -522,7 +545,7 @@ func (m *Model) awsDeviceForm(st *awsSetting) tea.Cmd {
 
 // awsSaveDevice saves the device chosen with the key.
 func (m *Model) awsSaveDevice(st *awsSetting, device string) tea.Cmd {
-	m.ov = &overlay{kind: panelNotice, title: "Set up AWS MFA", loading: true, question: "Saving the MFA device…"}
+	m.ov = &overlay{kind: panelNotice, title: "Set up AWS MFA", loading: true, question: "Saving the MFA device…", aws: st}
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		_, err := v.Save(&Change{Key: st.k, To: st.k, MFADevice: &device})
@@ -536,11 +559,11 @@ func (m *Model) awsDeviceSaved(msg *awsDeviceSavedMsg) tea.Cmd {
 		return nil
 	}
 	st := msg.st
-	m.endAWSSetup()
-	switch {
-	case errors.Is(msg.err, ErrLocked):
+	if errors.Is(msg.err, ErrLocked) {
 		return m.lock(lockedReason(msg.err))
-	case msg.err != nil:
+	}
+	m.endAWSSetup()
+	if msg.err != nil {
 		m.ov = m.awsLeft(st, "The MFA device wasn't saved: "+msg.err.Error())
 		return nil
 	}

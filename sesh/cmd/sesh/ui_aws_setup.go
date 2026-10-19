@@ -37,7 +37,7 @@ var _ tui.AWSSetup = uiAWSSetup{}
 func (uiAWSSetup) Profiles() []string { return uiAWSProfileNames() }
 
 // Check checks profile as sesh aws setup does before it asks for the key.
-func (uiAWSSetup) Check(v tui.Vault, profile string) (tui.AWSProfile, error) {
+func (uiAWSSetup) Check(profile string) (tui.AWSProfile, error) {
 	if err := uiAWSInstalled(); err != nil {
 		return tui.AWSProfile{}, err
 	}
@@ -48,17 +48,7 @@ func (uiAWSSetup) Check(v tui.Vault, profile string) (tui.AWSProfile, error) {
 	if err := k.Validate(); err != nil {
 		return tui.AWSProfile{}, err
 	}
-	u, ok := v.(*uiVault)
-	if !ok {
-		return tui.AWSProfile{}, errors.New("the vault can't be read for the setup")
-	}
-	p := tui.AWSProfile{Profile: profile, Kind: awsProfileKind(profile), KeepsHistory: u.store.HistoryKeep() > 0}
-	switch e, err := u.store.Lookup(k); {
-	case err == nil:
-		p.Existing = &e
-	case !errors.Is(err, vault.ErrNotFound):
-		return tui.AWSProfile{}, uiLocked(err)
-	}
+	p := tui.AWSProfile{Profile: profile, Kind: awsProfileKind(profile)}
 	if p.Kind == "" {
 		identity, err := uiCheckIdentity(profile)
 		if err != nil {
@@ -68,6 +58,24 @@ func (uiAWSSetup) Check(v tui.Vault, profile string) (tui.AWSProfile, error) {
 	}
 	p.Done = setup.Done(profile, p.Kind)
 	return p, nil
+}
+
+// Existing is the entry the vault has for profile, and whether it keeps
+// earlier keys.
+func (uiAWSSetup) Existing(v tui.Vault, profile string) (*vault.Entry, bool, error) {
+	u, ok := v.(*uiVault)
+	if !ok {
+		return nil, false, errors.New("the vault can't be read for the setup")
+	}
+	keeps := u.store.HistoryKeep() > 0
+	switch e, err := u.store.Lookup(vault.AWSKey(profile)); {
+	case err == nil:
+		return &e, keeps, nil
+	case errors.Is(err, vault.ErrNotFound):
+		return nil, keeps, nil
+	default:
+		return nil, false, uiLocked(err)
+	}
 }
 
 // ReadKey is the key typed, or an otpauth:// link's, which must make AWS's

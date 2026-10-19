@@ -39,10 +39,12 @@ const (
 
 // overlay is a panel over the app, about the entry k.
 type overlay struct {
-	opened   time.Time      // when a confirmation was asked
-	until    time.Time      // when a QR code shown closes
-	yes      func() tea.Cmd // what a confirmation's yes does
-	back     *overlay       // what Esc goes back to
+	opened time.Time      // when a confirmation was asked
+	until  time.Time      // when a QR code shown closes
+	yes    func() tea.Cmd // what a confirmation's yes does
+	back   *overlay       // what Esc goes back to
+	// aws is the AWS setup the panel is a step of, nil for another.
+	aws      *awsSetting
 	k        vault.Key
 	question string // a confirmation's
 	title    string
@@ -219,6 +221,10 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.endImport()
 		}
 		m.ov = ov.back
+		if ov.aws != nil && (ov.back == nil || ov.back.aws == nil) {
+			// Left: the AWS setup ends, its last step said.
+			m.endAWSSetup()
+		}
 		return nil
 	}
 	if m.width < minWidth || m.height < minHeight {

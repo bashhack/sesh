@@ -473,7 +473,7 @@ func (h *AWSSetupHandler) entrySource(k vault.Key) (vault.Key, error) {
 		return vault.Key{}, err
 	}
 	src, err := vault.ParseKey(id)
-	if err != nil {
+	if err != nil || src.Kind != vault.KindTOTP {
 		return vault.Key{}, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
 	}
 	if err := SourceEntry(h.store, src, k); err != nil {

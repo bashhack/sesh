@@ -47,26 +47,29 @@ func TestUI_AWSSetup(t *testing.T) {
 	s := uiAWSSetup{}
 
 	stubAWSSetup(t, "", "arn:aws:iam::123456789012:user/alice", errors.New("the AWS CLI isn't installed"))
-	if _, err := s.Check(u, "work"); err == nil || !strings.Contains(err.Error(), "isn't installed") {
+	if _, err := s.Check("work"); err == nil || !strings.Contains(err.Error(), "isn't installed") {
 		t.Errorf("no AWS CLI: %v", err)
 	}
 	stubAWSSetup(t, "", "arn:aws:iam::123456789012:user/alice", nil)
-	p, err := s.Check(u, "work")
-	if err != nil || p.Existing == nil || p.Existing.Key != vault.AWSKey("work") || p.Account != "123456789012" || !strings.Contains(p.Done, "AWS MFA is set up for profile work") {
+	p, err := s.Check("work")
+	if err != nil || p.Account != "123456789012" || !strings.Contains(p.Done, "AWS MFA is set up for profile work") {
 		t.Errorf("work: %+v, %v", p, err)
 	}
-	if p, err := s.Check(u, "new"); err != nil || p.Existing != nil {
-		t.Errorf("a new profile: %+v, %v", p, err)
+	if e, keeps, err := s.Existing(u, "work"); err != nil || e == nil || e.Key != vault.AWSKey("work") || keeps != (store.HistoryKeep() > 0) {
+		t.Errorf("work's entry: %+v, keeps %v, %v", e, keeps, err)
+	}
+	if e, _, err := s.Existing(u, "new"); err != nil || e != nil {
+		t.Errorf("a new profile's entry: %+v, %v", e, err)
 	}
 	stubAWSSetup(t, "", "", nil)
-	if _, err := s.Check(u, "work"); err == nil || !strings.Contains(err.Error(), "couldn't say who") {
+	if _, err := s.Check("work"); err == nil || !strings.Contains(err.Error(), "couldn't say who") {
 		t.Errorf("AWS can't say who: %v", err)
 	}
 	stubAWSSetup(t, aws.KindLogin, "", nil)
-	if p, err := s.Check(u, "work"); err != nil || p.Identity != "" || !strings.Contains(p.Done, "signs in with aws login") {
+	if p, err := s.Check("work"); err != nil || p.Identity != "" || !strings.Contains(p.Done, "signs in with aws login") {
 		t.Errorf("aws login, AWS not asked: %+v, %v", p, err)
 	}
-	if _, err := s.Check(u, "bad\tname"); err == nil {
+	if _, err := s.Check("bad\tname"); err == nil {
 		t.Error("a profile name with a tab was taken")
 	}
 
