@@ -430,7 +430,10 @@ func browserUnlockTouchID(reply *browserReply) error {
 		return err
 	}
 	// Nothing's started for a vault Touch ID can't unlock here.
-	if !touchIDUsable(dbPath, mat.Verify) || overSSH() {
+	switch {
+	case overSSH():
+		return &browserError{"no_touch_id", "Touch ID isn't used over SSH: run any sesh command (or sesh ui) to unlock sesh with the master password"}
+	case !touchIDUsable(dbPath, mat.Verify):
 		return &browserError{"no_touch_id", "Touch ID unlock isn't on for this vault (sesh touchid enable turns it on), or your fingerprints changed since it was: run any sesh command (or sesh ui) to unlock sesh with the master password"}
 	}
 	conn, err := agent.EnsureAgent()

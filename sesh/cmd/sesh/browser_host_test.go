@@ -354,4 +354,21 @@ func TestBrowserHost_TouchIDUnlocks(t *testing.T) {
 	if r, err := askHost(t, framed(`{"type":"status"}`)); err != nil || r.Locked == nil || *r.Locked {
 		t.Errorf("after the fingerprint: %+v, %v", r, err)
 	}
+	// Unlocked so, a fill gives the login.
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := store.SaveWithDetails(&vault.Entry{Key: k}, []byte("pw after touch"), &vault.Details{URL: "https://github.com"}); err != nil {
+		t.Fatal(err)
+	}
+	closeAuditStore(store)
+	if r, err := askHost(t, framed(`{"type":"fill","id":"password/github/alice","url":"https://github.com/"}`)); err != nil || r.Password != "pw after touch" {
+		t.Errorf("fill after the fingerprint: %+v, %v", r, err)
+	}
+	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+	if r, err := askHost(t, framed(`{"type":"unlock_touchid"}`)); err != nil || r.Code != "no_touch_id" || !strings.Contains(r.Message, "over SSH") {
+		t.Errorf("over SSH: %+v, %v", r, err)
+	}
 }
