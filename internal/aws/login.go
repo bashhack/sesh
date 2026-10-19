@@ -155,7 +155,8 @@ var noCredentials = func(profile string) bool {
 			return false
 		}
 	case <-time.After(noCredentialsWait):
-		cmd.Process.Kill() //nolint:errcheck,gosec // it's given up on either way
+		// Its session's processes, a credential_process helper's too.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck,gosec // it's given up on either way
 		<-done
 		return false
 	}

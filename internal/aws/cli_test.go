@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -227,7 +229,7 @@ func TestSignInKind(t *testing.T) {
 		{"a helper's in the CLI's words", `echo "aws: [ERROR]: Unable to retrieve credentials: Error when retrieving credentials from custom-process: Unable to retrieve credentials: no credentials found" >&2; exit 253`, ""},
 		{"another failure", `echo "aws: [ERROR]: [Errno 2] No such file or directory: '/opt/creds'" >&2; exit 255`, ""},
 		{"an older CLI", `echo "Unknown configure subcommand 'export-credentials'" >&2; exit 2`, ""},
-		{"no answer in time", `sleep 5; echo "aws: [ERROR]: Unable to retrieve credentials: no credentials found" >&2; exit 253`, ""},
+		{"no answer in time", `sleep 5 & echo $! > "$ASKED.child"; wait; echo "aws: [ERROR]: Unable to retrieve credentials: no credentials found" >&2; exit 253`, ""},
 	} {
 		wait := noCredentialsWait
 		noCredentialsWait = 500 * time.Millisecond
@@ -238,6 +240,21 @@ func TestSignInKind(t *testing.T) {
 		}
 		if b, err := os.ReadFile(asked); err != nil || strings.TrimSpace(string(b)) != "configure export-credentials --profile work" { //nolint:gosec // the test's own file
 			t.Errorf("%s: the CLI was asked %q (%v)", tc.name, b, err)
+		}
+	}
+	// What a CLI given up on started is stopped with it.
+	if b, err := os.ReadFile(asked + ".child"); err != nil { //nolint:gosec // the test's own file
+		t.Error(err)
+	} else if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err != nil {
+		t.Error(err)
+	} else {
+		// Killed, it's gone once the system has reaped it.
+		gone := false
+		for end := time.Now().Add(2 * time.Second); !gone && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			gone = syscall.Kill(pid, 0) != nil
+		}
+		if !gone {
+			t.Errorf("the CLI's child %d is still running", pid)
 		}
 	}
 	// The default profile is named default in what the CLI says.
