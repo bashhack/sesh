@@ -176,7 +176,7 @@ sesh aws --no-subshell             # print the credentials, to eval
 sesh aws --clip                    # copy the MFA code, for the AWS console
 ```
 
-For a profile that signs in with [`aws login`](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html) or SSO, `sesh aws` signs in when the session has ended, with the MFA code on the clipboard, and opens the shell with `AWS_PROFILE` set, so the AWS CLI keeps the credentials fresh.
+For a profile that signs in with [`aws login`](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html) or SSO, `sesh aws` signs in when the session has ended, with the MFA code on the clipboard, and opens the shell with `AWS_PROFILE` set, so the AWS CLI keeps the credentials fresh. A profile the AWS CLI has no credentials for yet (none at all, on a new computer) signs in with `aws login`, which sets it up.
 
 `sesh aws` opens your own shell, with your usual setup, plus the session's credentials and:
 - `(sesh:aws)` before your prompt;

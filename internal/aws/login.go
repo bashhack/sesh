@@ -1,6 +1,8 @@
 package aws
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,45 +49,97 @@ func RunCLIInteractive(profile string, args ...string) error {
 
 // ProfileKind says how profile signs in, when it isn't with an IAM user's
 // access keys: "aws login" (a login_session), "SSO" (an sso_session or
-// sso_start_url), or "a role" (a role_arn); "" otherwise, or when the
-// config file can't be read. Those give temporary credentials, which AWS
-// gives no MFA session to. It reads the AWS CLI's config file
-// (AWS_CONFIG_FILE, or ~/.aws/config) itself, which is quicker than
-// starting the CLI to ask.
+// sso_start_url), or "a role" (a role_arn); "" otherwise, or when a file
+// can't be read. Those give temporary credentials, which AWS gives no MFA
+// session to. A profile with no credentials at all (no access keys, no
+// credential_process or web identity token, in either file, or no section
+// of its own) is "aws login" too: aws login is how such a profile signs
+// in, and it writes the profile's login_session the first time. It reads
+// the AWS CLI's config and credentials files (AWS_CONFIG_FILE and
+// AWS_SHARED_CREDENTIALS_FILE, or ~/.aws/config and ~/.aws/credentials)
+// itself, which is quicker than starting the CLI to ask; credentials in
+// variables don't count, as sesh runs the CLI without them (CLIEnv).
 func ProfileKind(profile string) string {
-	path := os.Getenv("AWS_CONFIG_FILE")
+	config, ok := readCLIFile("AWS_CONFIG_FILE", "config")
+	if !ok {
+		return ""
+	}
+	creds, ok := readCLIFile("AWS_SHARED_CREDENTIALS_FILE", "credentials")
+	if !ok {
+		return ""
+	}
+	return profileKindIn(config, creds, profile)
+}
+
+// readCLIFile is the text of the AWS CLI's file that env names, or of
+// ~/.aws/name; "" for a file that isn't there, and false for one that
+// can't be read.
+func readCLIFile(env, name string) (string, bool) {
+	path := os.Getenv(env)
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return ""
+			return "", false
 		}
-		path = filepath.Join(home, ".aws", "config")
+		path = filepath.Join(home, ".aws", name)
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // the AWS CLI's own config file
-	if err != nil {
-		return ""
+	b, err := os.ReadFile(path) //nolint:gosec // the AWS CLI's own file
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", true
+	case err != nil:
+		return "", false
 	}
-	return profileKindIn(string(b), profile)
+	return string(b), true
 }
 
-// profileKindIn is ProfileKind for a config file's text: the section for
-// profile is [profile NAME], or [default] (or [profile default]) for the
-// default profile.
-func profileKindIn(config, profile string) string {
+// profileKindIn is ProfileKind for the config and credentials files' text.
+func profileKindIn(config, creds, profile string) string {
+	conf := sectionOf(config, profile, true)
+	switch {
+	case conf["login_session"] != "":
+		return KindLogin
+	case conf["sso_session"] != "" || conf["sso_start_url"] != "":
+		return KindSSO
+	case conf["role_arn"] != "":
+		return KindRole
+	case hasCredentials(conf) || hasCredentials(sectionOf(creds, profile, false)):
+		return ""
+	}
+	return KindLogin
+}
+
+// hasCredentials says whether a profile's settings give it credentials of
+// its own: access keys, or a process or web identity token that makes
+// them.
+func hasCredentials(settings map[string]string) bool {
+	return settings["aws_access_key_id"] != "" || settings["credential_process"] != "" || settings["web_identity_token_file"] != ""
+}
+
+// sectionOf is the settings of profile's section in an AWS CLI file's
+// text: in the config file (inConfig) [profile NAME], or [default] (or
+// [profile default]) for the default profile; in the credentials file,
+// [NAME].
+func sectionOf(text, profile string, inConfig bool) map[string]string {
 	if profile == "" {
 		profile = "default"
 	}
 	settings := map[string]string{}
 	in := false
-	for line := range strings.Lines(config) {
+	for line := range strings.Lines(text) {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "" || line[0] == '#' || line[0] == ';':
 		case line[0] == '[':
 			name := strings.TrimSpace(strings.Trim(line, "[]"))
-			in = name == "profile "+profile || (profile == "default" && name == "default")
-			if p, ok := strings.CutPrefix(name, "profile "); ok {
+			p, named := strings.CutPrefix(name, "profile ")
+			switch {
+			case !inConfig:
+				in = name == profile
+			case named:
 				in = strings.TrimSpace(p) == profile
+			default:
+				in = profile == "default" && name == "default"
 			}
 		case in:
 			if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(v) != "" {
@@ -93,13 +147,5 @@ func profileKindIn(config, profile string) string {
 			}
 		}
 	}
-	switch {
-	case settings["login_session"] != "":
-		return KindLogin
-	case settings["sso_session"] != "" || settings["sso_start_url"] != "":
-		return KindSSO
-	case settings["role_arn"] != "":
-		return KindRole
-	}
-	return ""
+	return settings
 }

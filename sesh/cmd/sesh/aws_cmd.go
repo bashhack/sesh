@@ -25,7 +25,8 @@ username: sesh list totp shows it.
 
 A profile that signs in with aws login or SSO: sesh aws signs in when its
 session has ended, with the MFA code on the clipboard, and opens the shell
-with AWS_PROFILE set, for the AWS CLI to keep the credentials fresh.`
+with AWS_PROFILE set, for the AWS CLI to keep the credentials fresh. A
+profile with no credentials yet signs in with aws login, which sets it up.`
 
 // newAWSProvider is the AWS sign-in over store; tests replace it.
 var newAWSProvider = func(store vault.Store) *awsProvider.Provider {

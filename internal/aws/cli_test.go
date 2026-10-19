@@ -138,6 +138,18 @@ region = us-east-1
 region = us-east-1
 ; login_session = commented out
 
+[profile inline]
+aws_access_key_id = AKIAEXAMPLE
+
+[profile process]
+credential_process = /usr/local/bin/creds
+
+[profile web]
+web_identity_token_file = /var/run/token
+
+[profile region-only]
+region = eu-west-1
+
 [profile sso]
 sso_session = corp
 
@@ -150,20 +162,53 @@ source_profile = keys
 
 [sso-session corp]
 sso_start_url = https://corp.awsapps.com/start
+
+[creds-only]
+aws_access_key_id = AKIANOTREAD
 `
-	path := filepath.Join(t.TempDir(), "config")
-	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
-		t.Fatal(err)
+	creds := `[keys]
+aws_access_key_id = AKIAEXAMPLE
+aws_secret_access_key = secret
+
+[profile region-only]
+aws_access_key_id = AKIANOTREAD
+`
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	t.Setenv("AWS_CONFIG_FILE", path)
-	for profile, want := range map[string]string{"": "aws login", "keys": "", "sso": "SSO", "sso-old": "SSO", "admin": "a role", "missing": "", "corp": ""} {
+	t.Setenv("AWS_CONFIG_FILE", write("config", config))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", write("credentials", creds))
+	// A profile with no credentials of its own signs in with aws login,
+	// which makes it: one with only a region, one in neither file, a
+	// section the config file doesn't read as a profile, and keys under a
+	// name the credentials file doesn't read as one.
+	for profile, want := range map[string]string{
+		"": "aws login", "keys": "", "inline": "", "process": "", "web": "",
+		"sso": "SSO", "sso-old": "SSO", "admin": "a role",
+		"region-only": "aws login", "missing": "aws login", "corp": "aws login", "creds-only": "aws login",
+	} {
 		if got := ProfileKind(profile); got != want {
 			t.Errorf("ProfileKind(%q) = %q, want %q", profile, got, want)
 		}
 	}
-	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
-	if got := ProfileKind(""); got != "" {
-		t.Errorf("no config file: %q", got)
+	// No files: nothing is set up, so aws login is the way in.
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none either"))
+	if got := ProfileKind("work"); got != "aws login" {
+		t.Errorf("no files: %q", got)
+	}
+	// A file that can't be read says nothing.
+	for _, env := range []string{"AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"} {
+		t.Setenv(env, dir) // a folder
+		if got := ProfileKind("work"); got != "" {
+			t.Errorf("%s unreadable: %q", env, got)
+		}
+		t.Setenv(env, filepath.Join(dir, "none"))
 	}
 }
 
