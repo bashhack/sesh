@@ -484,3 +484,33 @@ func TestSync_KeyNoteLate(t *testing.T) {
 		t.Errorf("the form opened over the leave question: %+v", a.form)
 	}
 }
+
+// Sync now from the sync panel shows there: syncing while it runs, then
+// what the sync said, above what's waiting now.
+func TestSync_NowInThePanel(t *testing.T) {
+	toSend := "1"
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", "Changed here, to send:          " + toSend}}, nil
+		},
+		Sync: func(Vault, SyncHow) ([]string, []string, bool) {
+			toSend = "0"
+			return []string{"Synced: 1 sent."}, []string{"Synced: 1 sent."}, true
+		},
+		Syncing: func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	_, sync := a.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	if s := a.screen(); !strings.Contains(s, "syncing…") {
+		t.Errorf("while it runs:\n%s", s)
+	}
+	a.run(sync)
+	s := a.screen()
+	if !isSyncPanel(a.ov) || !strings.Contains(s, "Synced: 1 sent.") || !strings.Contains(s, "to send:          0") || !strings.Contains(s, "sync now (last ") {
+		t.Errorf("after:\n%s", s)
+	}
+	if strings.Index(s, "Synced: 1 sent.") > strings.Index(s, "Sync folder:") {
+		t.Errorf("what the sync said isn't first:\n%s", s)
+	}
+}

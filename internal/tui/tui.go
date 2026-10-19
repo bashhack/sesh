@@ -441,8 +441,10 @@ type Model struct {
 	lastPull, lastPush, lastSynced time.Time
 	// lastSaid is what the last sync that said something said, line by
 	// line, and lastSaidAt when; for the sync results panel.
-	lastSaid      []string
-	lastSaidAt    time.Time
+	lastSaid   []string
+	lastSaidAt time.Time
+	// syncPanel is what the sync panel shows of sesh sync status.
+	syncPanel     SyncState
 	statusUntil   time.Time
 	lastKeepAlive time.Time
 	clipUntil     time.Time // when the clipboard clears what was copied
@@ -975,10 +977,16 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case syncSetMsg:
 		return m.gotSyncSet(msg)
+	case syncPanelMsg:
+		if isSyncPanel(m.ov) {
+			m.syncPanel = msg.st
+			m.fillSync(msg.just)
+		}
+		return nil
 	case keyNoteMsg:
 		// Only over the sync panel it was asked from: not over another
 		// form, nor once that panel's gone.
-		if msg.epoch != m.epoch || m.v == nil || m.form != nil || m.ov == nil || m.ov.kind != panelMenu || m.ov.title != "Sync" {
+		if msg.epoch != m.epoch || m.v == nil || m.form != nil || !isSyncPanel(m.ov) {
 			return nil
 		}
 		return m.keyChangeForm(msg.note)
@@ -1020,6 +1028,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 				}
 			}
 			return tea.Batch(m.endImport(), m.reread())
+		}
+		// Run from the sync panel: it shows what the sync said, and
+		// what's waiting now.
+		if msg.didSync && isSyncPanel(m.ov) {
+			return m.refreshSync(msg.all)
 		}
 		return nil
 	case keptAliveMsg:
