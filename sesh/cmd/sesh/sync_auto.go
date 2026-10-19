@@ -308,6 +308,9 @@ func autoSummary(s *vaultsync.Summary) []string {
 	if n := len(s.HeldBack); n > 0 {
 		lines = append(lines, "⚠️  Sync: "+heldBackSaid(n, strings.Join(s.HeldBack, ", "))+".")
 	}
+	if n := len(s.Retype); n > 0 {
+		lines = append(lines, "⚠️  Sync: "+retypeSaid(n, strings.Join(s.Retype, ", "))+".")
+	}
 	if s.Unfinished > 0 {
 		lines = append(lines, "Sync: out of time; the next sync finishes it.")
 	}

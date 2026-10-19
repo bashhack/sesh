@@ -126,7 +126,10 @@ func TestSync_LateSwitchForgeryAtTheRealCount(t *testing.T) {
 		t.Fatalf("desktop on the old key: %q, want the forgery taken", got)
 	}
 	syncOlder(t, laptop, f)
-	desktopNew, _ := switchDesktop(t, laptop, desktop, f, rec)
+	desktopNew, s := switchDesktop(t, laptop, desktop, f, rec)
+	if !slices.Equal(s.SetBack, []string{gh.String()}) {
+		t.Errorf("desktop taking the change: %+v, want github said as set back", s)
+	}
 	settleOlder(t, f, laptop, desktopNew)
 	for _, c := range []*computer{laptop, desktopNew} {
 		if got := c.secret(gh); got != "pw-2" {
@@ -527,8 +530,6 @@ func TestSync_LateSwitchLaterChanges(t *testing.T) {
 	noEvil(t, laptop, desktopNew)
 }
 
-// What was typed here is kept only until another computer's version has
-
 // An entry made under the old key and changed again before the switch is
 // still this computer's own: sent once it takes the change.
 func TestSync_LateSwitchMadeThenChanged(t *testing.T) {
@@ -921,11 +922,11 @@ func TestSync_LateSwitchMadeHereSecretGone(t *testing.T) {
 	cs[2].sync(f)
 	cs[1].sync(f)
 	desktop := takeKey(t, cs[1], laptop, rec, "the new password 1")
-	if s := syncOlder(t, desktop, f); !slices.Equal(s.HeldBack, []string{to.String()}) || len(s.Problems) != 0 {
-		t.Errorf("desktop taking the change: %+v, want bank2 held back, no problem", s)
+	if s := syncOlder(t, desktop, f); !slices.Equal(s.Retype, []string{to.String()}) || len(s.HeldBack)+len(s.Problems) != 0 {
+		t.Errorf("desktop taking the change: %+v, want bank2 held back until its secret is typed again, no problem", s)
 	}
 	desktop.put("bank2", "desk-3")
-	if s := syncOlder(t, desktop, f); len(s.HeldBack) != 0 {
+	if s := syncOlder(t, desktop, f); len(s.HeldBack)+len(s.Retype) != 0 {
 		t.Errorf("desktop, the secret typed again: %+v, want nothing held back", s)
 	}
 	third := takeKey(t, cs[2], laptop, rec, "the new password 1")

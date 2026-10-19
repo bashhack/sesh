@@ -47,14 +47,19 @@ type Summary struct {
 	Notes []string
 	// SetBack are the entries, by name, made as the folder has them under
 	// the new key, on the first sync after a master password change taken
-	// here: what was here besides was taken under the old key, and
-	// nothing was typed here since the folder's version.
+	// here, differing from what was here: what was here besides was taken
+	// under the old key (often just older than the folder's), and nothing
+	// typed here since the folder's version is lost.
 	SetBack []string
 	// HeldBack are the entries, by name, the folder has no version of
 	// under the new key, nor made here: not sent, and left as they are,
 	// until it has, or they're deleted for good here. Said, but not
 	// something a sync did (Nothing).
 	HeldBack []string
+	// Retype are such entries made here, whose secret typed here the vault
+	// no longer has (forgotten, or trimmed to history.keep): not sent
+	// until it's typed again here. Not something a sync did either.
+	Retype []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
 	Ignored int
@@ -713,7 +718,7 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 	// secret since forgotten or trimmed, the one now taken from the
 	// folder): held back until it's typed again here.
 	if folder == nil && r.Purged.IsZero() && (r.Kind == "" || len(r.Secret) == 0) {
-		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		y.sum.Retype = append(y.sum.Retype, name)
 		return nil
 	}
 	// The forget marks are what's made here: any taken under the old key
@@ -725,6 +730,9 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		if err := y.apply(uid, rev, folder, hash); err != nil {
 			return err
 		}
+		// Said whether the folder's is simply newer or what was here was
+		// forged: change counts, which the old password can make up,
+		// can't tell them apart.
 		if !sameEntry(local, folder) {
 			y.sum.SetBack = append(y.sum.SetBack, name)
 		}
@@ -1132,7 +1140,7 @@ func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash 
 		}
 		break
 	}
-	// One held back under the name (Summary.HeldBack) is never sent: it's
+	// One held back under the name (Summary.HeldBack, Retype) is never sent: it's
 	// renamed here, quietly, as the folder's version of it, when there is
 	// one, has its own name.
 	for _, it := range y.items {
@@ -1308,6 +1316,7 @@ func (s *Summary) String() string {
 	add(s.EarlierKey, "under an earlier key, not taken")
 	add(len(s.SetBack), "set back to the folder's, not sent")
 	add(len(s.HeldBack), "held back until the folder has them under the new key")
+	add(len(s.Retype), "held back until their secret is typed again")
 	add(s.Rewritten, "written again")
 	add(s.Resealed, "sealed again with the new master password's key")
 	add(len(s.Problems), "problems")

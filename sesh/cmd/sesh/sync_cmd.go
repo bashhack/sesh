@@ -376,6 +376,9 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	if len(s.HeldBack) > 0 {
 		fmt.Fprintf(&warned, "  ⚠️  %s\n", heldBackSaid(len(s.HeldBack), strings.Join(slices.Sorted(slices.Values(s.HeldBack)), ", ")))
 	}
+	if len(s.Retype) > 0 {
+		fmt.Fprintf(&warned, "  ⚠️  %s\n", retypeSaid(len(s.Retype), strings.Join(slices.Sorted(slices.Values(s.Retype)), ", ")))
+	}
 	if s.Nothing() {
 		_, err := fmt.Fprintf(app.Stdout, "✅ In sync with %s: nothing to do.\n%s", dir, warned.String())
 		return err
@@ -1060,13 +1063,20 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 // setBackSaid says n entries, named, were made as the folder has them
 // on taking a master password change (vaultsync.Summary.SetBack).
 func setBackSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, which anyone who knew it could have written, and wasn't typed here. A computer of yours that made such a change sends it once it takes the new password", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, so it isn't kept. Usually that's a change your other computers made since; if not, someone who knew the old password may have written it. A computer of yours that made a change there sends it once it takes the new password", nouns(n, "entry", "entries"), names)
 }
 
 // heldBackSaid says n entries, named, are held back on taking a master
 // password change (vaultsync.Summary.HeldBack).
 func heldBackSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, until its secret is typed again here, or until it's deleted for good here", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, or until it's deleted for good here", nouns(n, "entry", "entries"), names)
+}
+
+// retypeSaid says n entries, named, made here are held back on taking a
+// master password change until their secret is typed again
+// (vaultsync.Summary.Retype).
+func retypeSaid(n int, names string) string {
+	return fmt.Sprintf("%s (%s) made here, whose secret this vault no longer has as typed here (forgotten, or trimmed to history.keep): not sent until it's typed again here (sesh edit <entry> --secret, or --generate)", nouns(n, "entry", "entries"), names)
 }
 
 // earlierKeySaid says n entries had a file sealed with an earlier master

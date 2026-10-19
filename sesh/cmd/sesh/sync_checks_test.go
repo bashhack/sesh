@@ -344,15 +344,16 @@ func TestWriteSyncSummary_Warnings(t *testing.T) {
 // Entries set back or held back on taking a password change are said by
 // name, by sesh sync and by an automatic sync.
 func TestSyncSummary_SetAndHeldBack(t *testing.T) {
-	s := &vaultsync.Summary{SetBack: []string{"password/a"}, HeldBack: []string{"password/b", "password/c"}}
+	s := &vaultsync.Summary{SetBack: []string{"password/a"}, HeldBack: []string{"password/b", "password/c"}, Retype: []string{"password/d"}}
 	app := agentTestApp()
 	if err := writeSyncSummary(app, "~/sync", s); err != nil {
 		t.Fatal(err)
 	}
 	auto := strings.Join(autoSummary(s), "\n")
 	for _, want := range []string{
-		"1 entry (password/a) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one",
-		"2 entries (password/b, password/c): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has",
+		"1 entry (password/a) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, so it isn't kept. Usually",
+		"2 entries (password/b, password/c): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, or until it's deleted for good here",
+		"1 entry (password/d) made here, whose secret this vault no longer has as typed here (forgotten, or trimmed to history.keep): not sent until it's typed again here",
 	} {
 		if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, want) {
 			t.Errorf("sesh sync: %q, want %q", out, want)
