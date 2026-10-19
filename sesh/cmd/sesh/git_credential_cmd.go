@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/sitematch"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -192,27 +193,8 @@ func credentialMatches(e *vault.Entry, ask credentialAsk) bool {
 	if e.Kind != vault.KindPassword && e.Kind != vault.KindAPIKey || e.URL == "" {
 		return false
 	}
-	raw := e.URL
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || !strings.EqualFold(u.Scheme, ask.protocol) {
-		return false
-	}
-	if !strings.EqualFold(hostWithoutDefaultPort(u.Host, u.Scheme), hostWithoutDefaultPort(ask.host, ask.protocol)) {
+	if !sitematch.Matches(e.URL, ask.protocol, ask.host) {
 		return false
 	}
 	return ask.username == "" || e.Username == ask.username || e.Username == ""
-}
-
-// hostWithoutDefaultPort is host without :443 for https, or :80 for http.
-func hostWithoutDefaultPort(host, scheme string) string {
-	switch strings.ToLower(scheme) {
-	case "https":
-		return strings.TrimSuffix(host, ":443")
-	case "http":
-		return strings.TrimSuffix(host, ":80")
-	}
-	return host
 }

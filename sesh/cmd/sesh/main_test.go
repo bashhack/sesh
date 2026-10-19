@@ -76,8 +76,13 @@ func TestPrintUsage(t *testing.T) {
 			t.Errorf("--help still mentions %s", old)
 		}
 	}
-	if len(commands) != len(subcommands) {
-		t.Errorf("%d commands run, %d are listed", len(commands), len(subcommands))
+	if len(commands) != len(subcommands)+len(hiddenCommands) {
+		t.Errorf("%d commands run, %d are listed and %d hidden", len(commands), len(subcommands), len(hiddenCommands))
+	}
+	for c := range hiddenCommands {
+		if commands[c] == nil || strings.Contains(out, "sesh "+c) {
+			t.Errorf("sesh %s is hidden, but nothing runs it or the help lists it", c)
+		}
 	}
 	for _, c := range subcommands {
 		if commands[c.value] == nil {

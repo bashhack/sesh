@@ -118,7 +118,12 @@ var commands = map[string]func(*App, []string) error{
 	"recovery": runRecovery, "recover": runRecover, "touchid": runTouchID, "config": runConfig,
 	"init": runInit, "agent": runAgent, "run": runRun, "inject": runInject, "aws": runAWS,
 	"git-credential": runGitCredential, "completion": runCompletion, "sync": runSync,
+	"browser-host": runBrowserHost,
 }
+
+// hiddenCommands run, but aren't in the help or completion: another
+// program starts them (the browser, browser-host).
+var hiddenCommands = map[string]bool{"browser-host": true}
 
 // movedFlags say, for a flag that named a command before sesh's commands
 // were words, the command it's become.
