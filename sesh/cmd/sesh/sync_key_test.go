@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/syncfolder"
+	"github.com/bashhack/sesh/internal/tui"
 )
 
 // syncedPair makes a laptop and a desktop syncing through folder, under
@@ -1106,5 +1109,169 @@ func TestSync_StatusAfterRestoreToAnEarlierKey(t *testing.T) {
 	out, err := runSyncOut(t, "", false, "status")
 	if err != nil || !strings.Contains(out, "Changed in the folder, to take: 1") {
 		t.Errorf("status: %q, %v; want the desktop's new entry to take", out, err)
+	}
+}
+
+// The app takes a master password change made on another computer, as
+// sesh sync does: refused with a wrong password of either kind, then the
+// vault opens with the new one and has the laptop's entries.
+func TestUITakeKeyChange(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	putEntry(t, "password/b", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := uiSyncState(cfg); err != nil || !st.KeyChanged {
+		t.Fatalf("the sync row: %+v, %v; want the change to take", st, err)
+	}
+	if _, err := uiTakeKeyChange(cfg, []byte("wrong-password"), []byte("new-password-2")); !errors.Is(err, tui.ErrWrongPassword) {
+		t.Errorf("a wrong own password: %v", err)
+	}
+	if _, err := uiTakeKeyChange(cfg, []byte("old-password-1"), []byte("wrong-password")); err == nil || !strings.Contains(err.Error(), "isn't the new master password") {
+		t.Errorf("a wrong new password: %v", err)
+	}
+	ch, err := uiTakeKeyChange(cfg, []byte("old-password-1"), []byte("new-password-2"))
+	if err != nil || ch.Vault == nil || !strings.Contains(strings.Join(ch.Said, " "), "now opens with the new master password") {
+		t.Fatalf("taking it: %+v, %v", ch, err)
+	}
+	ch.Vault.Close() //nolint:errcheck,gosec // test cleanup
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	if got := getEntry(t, "password/b"); got != "secret-2" {
+		t.Errorf("desktop: b = %q, want the laptop's", got)
+	}
+	if now, _ := settings(); keyChangeToTake(now) { //nolint:errcheck // checked by the result
+		t.Error("a change to take still, after taking it")
+	}
+}
+
+// Before the new master password is typed, the app says what sesh sync
+// does: a record the folder's own files outrun may be an older one put
+// back. It's read with the app's own open vault.
+func TestUIKeyChangeNote(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	middle, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "new-password-2", "new-password-3")
+	if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), middle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	if note := uiKeyChangeNote(cfg, newUIVault(store)); !strings.Contains(note, "older record put back") {
+		t.Errorf("note %q, want the record said to be maybe an older one", note)
+	}
+}
+
+// Of two master password changes made at once, the app offers and takes
+// the other computer's only when it's the one kept; the app's own kept,
+// there's nothing to take.
+func TestUITakeKeyChangeFork(t *testing.T) {
+	orig := forkKept
+	t.Cleanup(func() { forkKept = orig })
+	for _, folderKept := range []bool{true, false} {
+		forkKept = func(string, string) bool { return folderKept }
+		dir := t.TempDir()
+		folder := filepath.Join(dir, "sync")
+		laptop, desktop := syncedPair(t, dir, folder, "password/a")
+		old, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		syncComputer(t, laptop, "laptop")
+		changePassword(t, "old-password-1", "laptop-password-2")
+		if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), old, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		syncComputer(t, desktop, "desktop")
+		changePassword(t, "old-password-1", "desktop-password-3")
+		syncComputer(t, laptop, "laptop")
+		t.Setenv("SESH_MASTER_PASSWORD", "laptop-password-2")
+		cfg, err := settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := uiSyncState(cfg)
+		if err != nil || st.KeyChanged != folderKept {
+			t.Fatalf("folder's kept %v: the row %+v, %v", folderKept, st, err)
+		}
+		ch, err := uiTakeKeyChange(cfg, []byte("laptop-password-2"), []byte("desktop-password-3"))
+		switch {
+		case folderKept && (err != nil || ch.Vault == nil):
+			t.Errorf("the folder's kept: %+v, %v; want it taken", ch, err)
+		case !folderKept && (err == nil || !strings.Contains(err.Error(), "no master password change")):
+			t.Errorf("this one's kept: %v; want nothing to take", err)
+		}
+		if ch.Vault != nil {
+			ch.Vault.Close() //nolint:errcheck,gosec // test cleanup
+		}
+	}
+}
+
+// With the agent locked under the app's vault, the change's proof can't be
+// checked: the note says nothing of it, not that it's forged.
+func TestUIKeyChangeNoteAgentLocked(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	startTestAgent(t)
+	mat, err := database.ReadUnlockMaterial(ddb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Unlock(conn, []byte("old-password-1"), mat.Salt, mat.Verify, mat.Params); err != nil {
+		t.Fatal(err)
+	}
+	closeAgentConn(conn)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") {
+		t.Fatalf("unlocked: %q", note)
+	}
+	if n := lockAgentHoldingOldKey(); strings.HasPrefix(n, "warning") {
+		t.Fatal(n)
+	}
+	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") || !strings.Contains(note, "couldn't be checked yet") {
+		t.Errorf("the agent locked: %q, want it said the change is checked later, not a forgery", note)
 	}
 }

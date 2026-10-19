@@ -31,6 +31,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/tui"
@@ -247,13 +248,17 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			}
 			return ""
 		},
-		LeaveSync:    func() (string, error) { return leaveSync(settingsNow(cfg)) },
-		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
-		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
-		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
-		DeleteBackup: func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
-		PlanRestore:  func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
-		Restore:      func(path string) (string, error) { return uiRestore(dbPath, path) },
+		LeaveSync: func() (string, error) { return leaveSync(settingsNow(cfg)) },
+		TakeKeyChange: func(current, next []byte) (tui.Changed, error) {
+			return uiTakeKeyChange(settingsNow(cfg), current, next)
+		},
+		KeyChangeNote: func(v tui.Vault) string { return uiKeyChangeNote(settingsNow(cfg), v) },
+		RenewBackups:  func() (string, error) { return uiRenewBackups(dbPath) },
+		Backups:       func() (tui.Backups, error) { return uiBackups(dbPath) },
+		BackUp:        func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
+		DeleteBackup:  func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
+		PlanRestore:   func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
+		Restore:       func(path string) (string, error) { return uiRestore(dbPath, path) },
 		// Settings read now: sync.dir may have changed since the app started.
 		Recovery:       func() (tui.Recovery, error) { return uiRecovery(settingsNow(cfg)) },
 		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(settingsNow(cfg)) },
@@ -980,7 +985,129 @@ func uiSyncState(cfg *config.Config) (tui.SyncState, error) {
 	if err != nil {
 		st.Lines = append(st.Lines, "❌ "+err.Error())
 	}
+	st.KeyChanged = keyChangeToTake(cfg)
+	if st.KeyChanged {
+		st.Said += ", master password changed elsewhere"
+	}
 	return st, nil
+}
+
+// keyChangeToTake says whether the sync folder cfg names has a master
+// password change made on another computer for this vault to take: one
+// from its key, or, of two made at once, the other's, kept.
+func keyChangeToTake(cfg *config.Config) bool {
+	_, err := syncFolderOf(cfg)
+	if errors.Is(err, errKeyChangedElsewhere) {
+		return true
+	}
+	if !errors.Is(err, errKeyFork) {
+		return false
+	}
+	info, err := syncfolder.New(cfg.SyncDir.Value).ReadInfo()
+	if err != nil {
+		return false
+	}
+	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	return err == nil && forkKept(database.UnlockID(info.Key.Verify), database.UnlockID(m.Verify))
+}
+
+// uiKeyChangeNote is what to know before typing the new master password
+// to take a change into v, the app's vault: that of two made at once, the
+// other's is kept, and that the folder's record may be an older one put
+// back, or isn't one this vault's key leads to.
+func uiKeyChangeNote(cfg *config.Config, v tui.Vault) string {
+	u, ok := v.(*uiVault)
+	if !ok {
+		return ""
+	}
+	// Its key not in hand (the agent locked), the change's proof can't be
+	// checked yet: that's said, rather than its being forged. The take
+	// opens the vault with the password typed, and checks it then.
+	if u.store.CheckUnlocked() != nil {
+		return "sesh's agent is locked, so the change couldn't be checked yet: it's checked once this vault's master password is typed."
+	}
+	if answered, _ := statusProbing.answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
+		return "The sync folder isn't answering: taking the change needs it."
+	}
+	var said []string
+	if _, err := syncFolderOf(cfg); errors.Is(err, errKeyFork) {
+		said = append(said, "It was changed here and on another computer at once, and the other's is kept on every computer. If no computer of yours made it, someone with access to the folder may have, with an old master password: sesh passwd puts this computer's back.")
+	}
+	t, err := prepareKeyTake(cfg, syncfolder.New(cfg.SyncDir.Value), u.store)
+	switch {
+	case err != nil:
+		said = append(said, "⚠️ "+err.Error())
+	case t.notLatest:
+		said = append(said, "⚠️ "+errNotLatest.Error())
+	}
+	if t != nil {
+		t.close()
+	}
+	return strings.Join(said, " ")
+}
+
+// uiTakeKeyChange takes the master password change made on another
+// computer for the app's vault, as sesh sync does: current is this
+// vault's master password, next the new one, both wiped. It opens the
+// vault again with next.
+func uiTakeKeyChange(cfg *config.Config, current, next []byte) (tui.Changed, error) {
+	defer secure.SecureZeroBytes(current)
+	defer secure.SecureZeroBytes(next)
+	if !keyChangeToTake(cfg) {
+		return tui.Changed{}, errors.New("there's no master password change from another computer to take")
+	}
+	dbPath := cfg.DBPath.Value
+	// Opened with the password typed, not the agent: the old key goes in
+	// the link to the new one, so files sealed with it go on opening.
+	src := database.NewMasterPasswordSource(dbPath, func(string) ([]byte, error) { return bytes.Clone(current), nil })
+	store, err := database.Open(dbPath, database.NewKeySourceOracle(src))
+	if err != nil {
+		return tui.Changed{}, fmt.Errorf("open the vault: %w", err)
+	}
+	defer store.Close() //nolint:errcheck // the change has committed, or failed, by then
+	ownKey, err := src.GetEncryptionKey()
+	if errors.Is(err, database.ErrWrongPassword) {
+		return tui.Changed{}, tui.ErrWrongPassword
+	}
+	if err != nil {
+		return tui.Changed{}, err
+	}
+	defer secure.SecureZeroBytes(ownKey)
+	if err := store.CheckKey(); err != nil {
+		return tui.Changed{}, err
+	}
+	f := syncfolder.New(cfg.SyncDir.Value)
+	t, err := prepareKeyTake(cfg, f, store)
+	if err != nil {
+		return tui.Changed{}, err
+	}
+	defer t.close()
+	if err := database.CheckMasterPassword(next, t.folderRec); err != nil {
+		return tui.Changed{}, errors.New("that isn't the new master password, the one your other computers use")
+	}
+	r, err := t.take(cfg, f, store, ownKey, next, true)
+	if err != nil {
+		return tui.Changed{}, err
+	}
+	secure.SecureZeroBytes(r.key)
+	ch := tui.Changed{Said: r.said}
+	switch {
+	case r.syncErr != nil:
+		ch.Said = append(ch.Said, fmt.Sprintf("The sync after switching: %v; the next sync tries again.", r.syncErr))
+	case r.sum != nil:
+		ch.Said = append(ch.Said, autoSummary(r.sum)...)
+	}
+	if os.Getenv("SESH_MASTER_PASSWORD") != "" {
+		ch.Said = append(ch.Said, "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong.")
+	}
+	ch.OldBackups, ch.Renew = uiOldBackups(dbPath, "master password")
+	v, err := reopenWith(cfg, bytes.Clone(next))
+	if err != nil {
+		ch.Said = append(ch.Said, fmt.Sprintf("It couldn't open the vault again (%v): unlock it with the new master password.", err))
+		return ch, nil
+	}
+	ch.Vault = newUIVault(v)
+	return ch, nil
 }
 
 // stuck is until when the app's syncs on their own wait for a folder that

@@ -403,3 +403,114 @@ func TestSync_StartLockedFirst(t *testing.T) {
 		t.Error("still syncing after a start the lock kept from running")
 	}
 }
+
+// A master password changed on another computer is taken from the sync
+// panel: this vault's password, then the new one; the app goes on with
+// the vault opened anew, and a wrong one keeps the form.
+func TestSync_TakeKeyChange(t *testing.T) {
+	old, fresh := newFake(), newFake()
+	var asked []string
+	var err error
+	a := newApp(t, old, Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync, master password changed elsewhere", On: true, KeyChanged: true, Lines: []string{"⚠️  the master password was changed on another computer"}}, nil
+		},
+		TakeKeyChange: func(current, next []byte) (Changed, error) {
+			asked = append(asked, string(current)+">"+string(next))
+			if err != nil {
+				return Changed{}, err
+			}
+			return Changed{Vault: fresh, Said: []string{"This vault now opens with the new master password, as the other computers' do."}}, nil
+		},
+		KeyChangeNote: func(Vault) string { return "⚠️ the folder's record may be an older one put back" },
+		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:       func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	if !strings.Contains(a.screen(), "take the new master password") {
+		t.Fatalf("the sync panel:\n%s", a.screen())
+	}
+	a.press("p")
+	if a.form == nil || a.form.title != "Take the new master password" || !strings.Contains(a.form.note, "older one put back") {
+		t.Fatalf("form %+v", a.form)
+	}
+	a.press("enter", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "Type this vault's master password") || len(asked) != 0 {
+		t.Fatalf("nothing typed: asked %q, form %+v", asked, a.form)
+	}
+	err = ErrWrongPassword
+	a.press("shift+tab", "old-password", "tab", "new-password-1", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "not the current master password") {
+		t.Fatalf("a wrong one: asked %q, form %+v", asked, a.form)
+	}
+	err = nil
+	a.press("enter")
+	if !slices.Equal(asked, []string{"old-password>new-password-1", "old-password>new-password-1"}) || a.form != nil {
+		t.Fatalf("asked %q, form %+v", asked, a.form)
+	}
+	if !strings.Contains(a.screen(), "now opens with the new master password") || !old.closed || a.v == nil || a.v.v != Vault(fresh) {
+		t.Errorf("after: old closed %v\n%s", old.closed, a.screen())
+	}
+}
+
+// What to know before taking a change, come late, opens its form only
+// over the sync panel it was asked from.
+func TestSync_KeyNoteLate(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, KeyChanged: true}, nil
+		},
+		TakeKeyChange: func(_, _ []byte) (Changed, error) { return Changed{}, nil },
+		KeyChangeNote: func(Vault) string { return "" },
+		LeaveSync:     func() (string, error) { return "", nil },
+		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:       func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	_, note := a.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	a.press("esc", "esc", "esc")
+	a.run(note)
+	if a.form != nil {
+		t.Errorf("the form opened with the sync panel gone: %+v", a.form)
+	}
+	// Nor over the leave question, which has the panel's title.
+	a.press("ctrl+g", ",", "enter")
+	_, note = a.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	a.press("x")
+	a.run(note)
+	if a.form != nil {
+		t.Errorf("the form opened over the leave question: %+v", a.form)
+	}
+}
+
+// Sync now from the sync panel shows there: syncing while it runs, then
+// what the sync said, above what's waiting now.
+func TestSync_NowInThePanel(t *testing.T) {
+	toSend := "1"
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", "Changed here, to send:          " + toSend}}, nil
+		},
+		Sync: func(Vault, SyncHow) ([]string, []string, bool) {
+			toSend = "0"
+			return []string{"Synced: 1 sent."}, []string{"Synced: 1 sent."}, true
+		},
+		Syncing: func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	_, sync := a.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	if s := a.screen(); !strings.Contains(s, "syncing…") {
+		t.Errorf("while it runs:\n%s", s)
+	}
+	a.run(sync)
+	s := a.screen()
+	if !isSyncPanel(a.ov) || !strings.Contains(s, "Synced: 1 sent.") || !strings.Contains(s, "to send:          0") || !strings.Contains(s, "sync now (last ") {
+		t.Errorf("after:\n%s", s)
+	}
+	if strings.Index(s, "Synced: 1 sent.") > strings.Index(s, "Sync folder:") {
+		t.Errorf("what the sync said isn't first:\n%s", s)
+	}
+}

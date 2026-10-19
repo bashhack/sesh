@@ -184,7 +184,7 @@ func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Ti
 			return append(lines, "⚠️  Sync: "+ferr.Error()), false
 		}
 		if !kept {
-			return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once, and the other's is kept; nothing syncs until sesh sync takes it."), false
+			return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once, and the other's is kept; nothing syncs until it's taken: sesh sync, or the Sync row in sesh ui's settings."), false
 		}
 		lines = append(lines, "Sync: "+ownForkKeptSaid)
 		f, err = syncFolderOf(cfg)
@@ -196,7 +196,7 @@ func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Ti
 		return lines, false
 	case errors.Is(err, errKeyChangedElsewhere):
 		// Taking it asks for the new password: left to sesh sync.
-		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it."), false
+		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until it's taken: sesh sync, or the Sync row in sesh ui's settings."), false
 	case errors.Is(err, errKeyToSend):
 		info, rerr := f.ReadInfo()
 		rec, merr := database.ReadUnlockMaterial(cfg.DBPath.Value)

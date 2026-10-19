@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -63,6 +64,9 @@ func (m *Model) syncNow() tea.Cmd {
 	now := m.opts.Now()
 	m.lastPull, m.lastPush = now, now
 	m.say("Syncing…")
+	if isSyncPanel(m.ov) {
+		m.fillSync(nil)
+	}
 	return m.checkAfter(SyncNow, true)
 }
 
@@ -112,7 +116,10 @@ func (m *Model) syncItem() *item {
 		return nil
 	}
 	label := "sync now"
-	if !m.lastSynced.IsZero() {
+	switch {
+	case m.syncing:
+		label = "syncing…"
+	case !m.lastSynced.IsZero():
 		label += " (last " + m.lastSynced.Local().Format("15:04") + ")"
 	}
 	return &item{key: "s", label: label, run: m.syncNow}
@@ -125,8 +132,9 @@ type SyncState struct {
 	// Lines are what sesh sync status says, line by line: a warning or a
 	// problem starting ⚠️ or ❌.
 	Lines []string
-	// On says the vault syncs.
-	On bool
+	// On says the vault syncs; KeyChanged, that the master password was
+	// changed on another computer, and nothing syncs till it's taken.
+	On, KeyChanged bool
 }
 
 // syncRow is the settings panel's row for syncing.
@@ -164,19 +172,44 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 		}
 		return m.startSync()
 	}
-	ov := &overlay{kind: panelMenu, back: m.ov, title: "Sync"}
-	for _, l := range st.Lines {
+	m.ov = &overlay{kind: panelMenu, back: m.ov, title: "Sync"}
+	m.syncPanel = st
+	m.fillSync(nil)
+	return nil
+}
+
+// isSyncPanel says whether ov is the sync panel.
+func isSyncPanel(ov *overlay) bool {
+	return ov != nil && ov.kind == panelMenu && ov.title == "Sync"
+}
+
+// fillSync lists the open sync panel's rows: what the sync just run from
+// it said (just), what sesh sync status says (m.syncPanel), then what can
+// be done.
+func (m *Model) fillSync(just []string) {
+	ov, st := m.ov, m.syncPanel
+	sel := ov.sel
+	ov.items = nil
+	for _, l := range just {
 		ov.items = append(ov.items, m.lineItem(l))
 	}
+	for i, l := range st.Lines {
+		it := m.lineItem(l)
+		it.rule = i == 0 && len(just) > 0
+		ov.items = append(ov.items, it)
+	}
+	if st.KeyChanged && m.opts.TakeKeyChange != nil {
+		ov.items = append(ov.items, item{key: "p", label: "take the new master password…", rule: true, stay: true, run: m.takeKeyChange})
+	}
 	if it := m.syncItem(); it != nil {
-		it.rule, it.stay = true, true
+		it.rule, it.stay = !st.KeyChanged || m.opts.TakeKeyChange == nil, true
 		ov.items = append(ov.items, *it)
 	}
 	if it := m.resultsItem("r"); it != nil {
 		ov.items = append(ov.items, *it)
 	}
 	if leave := m.opts.LeaveSync; leave != nil {
-		settings := m.ov
+		settings := ov.back
 		ov.items = append(ov.items, item{key: "x", label: "leave…", stay: true, run: func() tea.Cmd {
 			m.ov = m.confirm(settings, "Sync", "Stop syncing with "+st.Said+"? This vault's entries stay as they are, and so does the folder for your other computers; sesh sync join joins it again, merging what changed meanwhile.", func() tea.Cmd {
 				m.ov = settings
@@ -189,7 +222,75 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 			return nil
 		}})
 	}
-	m.ov = ov
+	ov.sel = min(sel, max(len(ov.items)-1, 0))
+}
+
+// syncPanelMsg is what sesh sync status says after a sync run from the
+// sync panel, and what that sync said.
+type syncPanelMsg struct {
+	just []string
+	st   SyncState
+}
+
+// refreshSync reads the sync panel's status again after a sync, to show
+// with what the sync said.
+func (m *Model) refreshSync(just []string) tea.Cmd {
+	get := m.opts.SyncState
+	if get == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		st, err := get()
+		if err != nil {
+			st.Lines = append(st.Lines, "❌ "+err.Error())
+		}
+		return syncPanelMsg{st: st, just: just}
+	}
+}
+
+// takeKeyChange asks for this vault's master password and the new one,
+// the other computers', and takes the change, as sesh sync does.
+func (m *Model) takeKeyChange() tea.Cmd {
+	note, epoch := m.opts.KeyChangeNote, m.epoch
+	if note == nil {
+		return m.keyChangeForm("")
+	}
+	m.say("Reading the master password change…")
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		return keyNoteMsg{note: note(v), epoch: epoch}
+	})
+}
+
+// keyNoteMsg is what to know before taking a master password change.
+type keyNoteMsg struct {
+	note  string
+	epoch int
+}
+
+// keyChangeForm is the form taking the master password change, saying
+// note too.
+func (m *Model) keyChangeForm(note string) tea.Cmd {
+	current := &input{kind: inputSecret, label: "this vault's master password", prompt: "the one it opens with now"}
+	next := &input{kind: inputSecret, label: "the new master password", prompt: "the one your other computers use"}
+	f := &form{title: "Take the new master password", inputs: []*input{current, next}, row: -1, enterDone: "take it",
+		working: "Taking the new master password…", quitting: "Quitting once the new master password is taken…"}
+	f.note = "The master password was changed on another computer. This vault is re-encrypted under the new one, and syncs again."
+	if note != "" {
+		f.note += " " + note
+	}
+	f.submit = func() tea.Cmd {
+		switch {
+		case len(current.secret) == 0:
+			f.err = "Type this vault's master password."
+		case len(next.secret) == 0:
+			f.err = "Type the new master password, the one your other computers use."
+		default:
+			return m.runChangeWith(m.opts.TakeKeyChange, bytes.Clone(current.secret), bytes.Clone(next.secret))
+		}
+		return nil
+	}
+	f.focusInput(0)
+	m.form = f
 	return nil
 }
 
