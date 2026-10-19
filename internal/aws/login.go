@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // The kinds of profile ProfileKind tells apart, by how they sign in.
@@ -102,4 +104,70 @@ func profileKindIn(config, profile string) string {
 		return KindRole
 	}
 	return ""
+}
+
+// SignInKind is ProfileKind, but a profile it takes for an IAM user's
+// access keys that the AWS CLI says has no credentials at all (none of
+// any kind, or no profile by that name) is "aws login": that's how such a
+// profile signs in, and aws login writes the profile's login_session the
+// first time. Whether there are any is the CLI's own answer, not read from
+// its files here, so a profile with credentials however written keeps its
+// way in.
+func SignInKind(profile string) string {
+	if kind := ProfileKind(profile); kind != "" {
+		return kind
+	}
+	if noCredentials(profile) {
+		return KindLogin
+	}
+	return ""
+}
+
+// noCredentialsWait is how long the AWS CLI is given to say whether a
+// profile has credentials; one it takes longer for keeps its way in.
+var noCredentialsWait = 10 * time.Second
+
+// noCredentials says whether the AWS CLI says profile has no credentials,
+// asked with aws configure export-credentials, which works them out as
+// the CLI does for any command; what it prints, the credentials when
+// there are some, goes nowhere. Only its own two messages for none count:
+// no credentials found, and no profile by that name, each the end of what
+// it says, and not inside a credential_process helper's error, which it
+// quotes. Anything else (a helper failing, the CLI not there, an older
+// one without the command, no answer in noCredentialsWait) is no. It runs
+// in a session of its own, so the CLI can't ask at the terminal (a role's
+// MFA code): a question it can't ask is an error, so no.
+var noCredentials = func(profile string) bool {
+	cmd := execCommand("aws", CLIArgs(profile, "configure", "export-credentials")...)
+	cmd.Env = CLIEnv(profile)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr // stdout, unset, goes nowhere
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.WaitDelay = time.Second // a child left holding stderr
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return false
+		}
+	case <-time.After(noCredentialsWait):
+		// Its session's processes, a credential_process helper's too.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck,gosec // it's given up on either way
+		<-done
+		return false
+	}
+	said := strings.TrimSpace(stderr.String())
+	if strings.Contains(said, "Error when retrieving credentials from") {
+		return false // a helper's, perhaps saying "not found" of its own
+	}
+	name := profile
+	if name == "" {
+		name = "default"
+	}
+	return strings.HasSuffix(said, "Unable to retrieve credentials: no credentials found") ||
+		strings.HasSuffix(said, "Unable to retrieve credentials: The config profile ("+name+") could not be found")
 }

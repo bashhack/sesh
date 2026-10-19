@@ -2,12 +2,15 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/subshell"
 	"github.com/bashhack/sesh/internal/totp"
@@ -126,6 +129,30 @@ func TestAWSLogin_SignsIn(t *testing.T) {
 		case !tc.ssh && (len(*copied) == 0 || (*copied)[0] != code):
 			t.Errorf("%s: copied %q, want %s", tc.kind, *copied, code)
 		}
+	}
+}
+
+// A profile the AWS CLI says has no credentials signs in with aws login,
+// which sets it up, with the MFA code on the clipboard.
+func TestAWSLogin_NotSetUp(t *testing.T) {
+	loginVault(t)
+	f := &fakeLogin{sessions: []error{errors.New("aws sts get-caller-identity: aws: [ERROR]: The config profile (work) could not be found"), nil}}
+	stubLogin(t, f)
+	awsProfileKind = aws.SignInKind
+	dir := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	cli := "#!/bin/sh\necho 'aws: [ERROR]: Unable to retrieve credentials: The config profile (work) could not be found' >&2\nexit 253\n"
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte(cli), 0o700); err != nil { //nolint:gosec // a test's AWS CLI
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	app, copied := cliApp("", true)
+	_, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell")
+	if err != nil {
+		t.Fatalf("sesh aws: %v\n%s", err, errOut)
+	}
+	if len(f.logins) != 1 || !slices.Equal(f.logins[0], []string{"login"}) || len(*copied) == 0 || !strings.Contains(errOut, "could not be found): signing in with aws login") {
+		t.Errorf("signed in with %q, copied %d codes\n%s", f.logins, len(*copied), errOut)
 	}
 }
 

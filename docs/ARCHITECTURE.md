@@ -398,7 +398,7 @@ AWS and TOTP follow different flows because AWS requires a network round-trip to
 
 ### AWS Authentication Flow
 
-A profile that signs in with `aws login` or SSO (told by `aws configure get login_session`, `sso_session` or `sso_start_url`) takes another path, in `aws_login.go`: if the profile's session doesn't work, sesh runs the AWS CLI's sign-in, offering the MFA code it holds on the clipboard meanwhile, then opens the shell with `AWS_PROFILE` set and no credentials in variables, for the AWS CLI to keep fresh. The flow below is for profiles with an IAM user's access keys.
+A profile that signs in with `aws login` or SSO (told by `login_session`, `sso_session` or `sso_start_url` in the AWS CLI's config, which `ProfileKind` reads itself; or, as `SignInKind` adds, by the AWS CLI saying the profile has no credentials at all, asked with `aws configure export-credentials` with its output thrown away: `aws login` sets such a profile up) takes another path, in `aws_login.go`: if the profile's session doesn't work, sesh runs the AWS CLI's sign-in, offering the MFA code it holds on the clipboard meanwhile, then opens the shell with `AWS_PROFILE` set and no credentials in variables, for the AWS CLI to keep fresh. The flow below is for profiles with an IAM user's access keys.
 
 The mode decision happens in `sesh aws` *before* credential generation. Subshell and clipboard modes follow different code paths:
 
