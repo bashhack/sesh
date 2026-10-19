@@ -3633,6 +3633,11 @@ func TestAWSMFADevice(t *testing.T) {
 	a.press("ctrl+k", "e")
 	focus("name")
 	a.press("ctrl+u", "aws-old", "ctrl+s")
+	// As sesh edit asks, the first save says sesh aws won't find it.
+	if s := a.screen(); f.entries[0].Key.Service != "aws" || !strings.Contains(s, "This is an AWS profile's MFA entry: as totp/aws-old/work") {
+		t.Fatalf("renamed away from aws with no word:\n%s", s)
+	}
+	a.press("ctrl+s")
 	if s := a.screen(); f.entries[0].Key.Service != "aws-old" || !strings.Contains(s, "MFA device  arn:aws:iam::") {
 		t.Fatalf("renamed: %+v\n%s", f.entries[0], s)
 	}

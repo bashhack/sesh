@@ -214,6 +214,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 	f := &form{title: title, inputs: inputs, row: -1}
 	orig := *e
+	var warnedAs vault.Key // the name a rename of an AWS profile's entry was last warned of
 	f.submit = func() tea.Cmd {
 		k := kind()
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
@@ -241,6 +242,14 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 		if !adding {
 			c.Key = orig.Key
+		}
+		// An AWS profile's entry is totp/aws/<profile>: under another name,
+		// sesh aws doesn't find it. The first save says so, as sesh edit
+		// asks.
+		if !adding && orig.Key == vault.AWSKey(orig.Username) && c.To != vault.AWSKey(c.To.Username) && warnedAs != c.To {
+			warnedAs = c.To
+			f.err = "This is an AWS profile's MFA entry: as " + c.To.String() + ", sesh aws won't find it. Press Ctrl-S again to rename it anyway."
+			return nil
 		}
 		if u := url.value(); adding && u != "" || !adding && u != orig.URL {
 			c.URL = &u
