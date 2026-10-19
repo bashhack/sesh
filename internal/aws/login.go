@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // The kinds of profile ProfileKind tells apart, by how they sign in.
@@ -121,27 +123,50 @@ func SignInKind(profile string) string {
 	return ""
 }
 
-// noCredentialsMessages are what the AWS CLI says of a profile with no
-// credentials, or none by its name.
-var noCredentialsMessages = []string{"no credentials found", "Unable to locate credentials", "could not be found"}
+// noCredentialsWait is how long the AWS CLI is given to say whether a
+// profile has credentials; one it takes longer for keeps its way in.
+var noCredentialsWait = 10 * time.Second
 
 // noCredentials says whether the AWS CLI says profile has no credentials,
 // asked with aws configure export-credentials, which works them out as
 // the CLI does for any command; what it prints, the credentials when
-// there are some, is thrown away. Anything else it says (or the CLI not
-// being there) is no.
+// there are some, goes nowhere. Only its own two messages for none count:
+// no credentials found, and no profile by that name, each the end of what
+// it says, and not inside a credential_process helper's error, which it
+// quotes. Anything else (a helper failing, the CLI not there, an older
+// one without the command, no answer in noCredentialsWait) is no. It runs
+// in a session of its own, so the CLI can't ask at the terminal (a role's
+// MFA code): a question it can't ask is an error, so no.
 var noCredentials = func(profile string) bool {
 	cmd := execCommand("aws", CLIArgs(profile, "configure", "export-credentials")...)
 	cmd.Env = CLIEnv(profile)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr // stdout, unset, goes nowhere
-	if cmd.Run() == nil {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.WaitDelay = time.Second // a child left holding stderr
+	if err := cmd.Start(); err != nil {
 		return false
 	}
-	for _, m := range noCredentialsMessages {
-		if strings.Contains(stderr.String(), m) {
-			return true
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return false
 		}
+	case <-time.After(noCredentialsWait):
+		cmd.Process.Kill() //nolint:errcheck,gosec // it's given up on either way
+		<-done
+		return false
 	}
-	return false
+	said := strings.TrimSpace(stderr.String())
+	if strings.Contains(said, "Error when retrieving credentials from") {
+		return false // a helper's, perhaps saying "not found" of its own
+	}
+	name := profile
+	if name == "" {
+		name = "default"
+	}
+	return strings.HasSuffix(said, "Unable to retrieve credentials: no credentials found") ||
+		strings.HasSuffix(said, "Unable to retrieve credentials: The config profile ("+name+") could not be found")
 }

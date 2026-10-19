@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/testutil"
 )
@@ -218,11 +219,19 @@ func TestSignInKind(t *testing.T) {
 	for _, tc := range []struct{ name, cli, want string }{
 		{"credentials", `printf 'export AWS_ACCESS_KEY_ID=AKIAFAKE\n'`, ""},
 		{"none", `echo "aws: [ERROR]: An error occurred (Configuration): Unable to retrieve credentials: no credentials found" >&2; exit 253`, "aws login"},
-		{"older wording", `echo "Unable to locate credentials. You can configure credentials by running \"aws login\"." >&2; exit 253`, "aws login"},
 		{"no such profile", `echo "aws: [ERROR]: Unable to retrieve credentials: The config profile (work) could not be found" >&2; exit 253`, "aws login"},
+		{"another profile not found", `echo "aws: [ERROR]: Unable to retrieve credentials: The config profile (base) could not be found" >&2; exit 253`, ""},
+		// A credential_process helper's own words, which the CLI quotes.
+		{"a helper's not found", `echo "aws: [ERROR]: Unable to retrieve credentials: Error when retrieving credentials from custom-process: item work could not be found in vault" >&2; exit 253`, ""},
+		{"a helper's none", `echo "aws: [ERROR]: Unable to retrieve credentials: Error when retrieving credentials from custom-process: no credentials found" >&2; exit 253`, ""},
+		{"a helper's in the CLI's words", `echo "aws: [ERROR]: Unable to retrieve credentials: Error when retrieving credentials from custom-process: Unable to retrieve credentials: no credentials found" >&2; exit 253`, ""},
 		{"another failure", `echo "aws: [ERROR]: [Errno 2] No such file or directory: '/opt/creds'" >&2; exit 255`, ""},
 		{"an older CLI", `echo "Unknown configure subcommand 'export-credentials'" >&2; exit 2`, ""},
+		{"no answer in time", `sleep 5; echo "aws: [ERROR]: Unable to retrieve credentials: no credentials found" >&2; exit 253`, ""},
 	} {
+		wait := noCredentialsWait
+		noCredentialsWait = 500 * time.Millisecond
+		t.Cleanup(func() { noCredentialsWait = wait })
 		fakeCLI(t, `echo "$@" > "$ASKED"; `+tc.cli)
 		if got := SignInKind("work"); got != tc.want {
 			t.Errorf("%s: SignInKind = %q, want %q", tc.name, got, tc.want)
@@ -231,7 +240,12 @@ func TestSignInKind(t *testing.T) {
 			t.Errorf("%s: the CLI was asked %q (%v)", tc.name, b, err)
 		}
 	}
-	if err := os.Remove(asked); err != nil {
+	// The default profile is named default in what the CLI says.
+	fakeCLI(t, `echo "aws: [ERROR]: Unable to retrieve credentials: The config profile (default) could not be found" >&2; exit 253`)
+	if got := SignInKind(""); got != KindLogin {
+		t.Errorf("the default profile not found: %q", got)
+	}
+	if err := os.Remove(asked); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	if got := SignInKind("sso"); got != KindSSO {
