@@ -71,13 +71,13 @@ func (m *Model) syncNow() tea.Cmd {
 func (m *Model) checkAfter(how SyncHow, sync bool) tea.Cmd {
 	epoch, run := m.epoch, m.opts.Sync
 	read := m.read(func(v Vault, _ func() bool) tea.Msg {
-		var said []string
+		var said, all []string
 		var ran bool
 		if sync {
-			said, ran = run(v, how)
+			said, all, ran = run(v, how)
 		}
 		changed, err := v.Check()
-		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, didSync: sync, ran: ran}
+		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, all: all, didSync: sync, ran: ran}
 	})
 	// A vault closed before it ran (locked) still ends the sync, so the
 	// next can run.
@@ -136,7 +136,7 @@ func (m *Model) syncRow(st SyncState) item {
 		said += ", synced " + m.lastSynced.Local().Format("15:04")
 	}
 	detail := "Not syncing with other computers. sesh sync init <folder> makes a sync folder from this vault; on another computer, sesh sync join <folder>."
-	does := ""
+	does := "see how"
 	if st.On {
 		detail = strings.Join(st.Lines, "\n")
 		does = "see it"
@@ -162,7 +162,7 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 		ov.items = append(ov.items, m.lineItem(l))
 	}
 	if it := m.syncItem(); it != nil {
-		it.rule = true
+		it.rule, it.stay = true, true
 		ov.items = append(ov.items, *it)
 	}
 	if it := m.resultsItem("r"); it != nil {
@@ -179,7 +179,12 @@ func (m *Model) lineItem(l string) item {
 	if strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌") {
 		label = lipgloss.NewStyle().Foreground(m.th.warn).Render(l)
 	}
-	return item{label: label, detail: l, stay: true, run: func() tea.Cmd { return nil }}
+	it := item{label: label, stay: true, run: func() tea.Cmd { return nil }}
+	// Whole below only when the row cuts it.
+	if lipgloss.Width(l) > 48 {
+		it.detail = l
+	}
+	return it
 }
 
 // resultsItem opens what the last sync that said something said; nil

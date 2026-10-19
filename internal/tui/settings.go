@@ -233,8 +233,13 @@ func (m *Model) refreshSettings() tea.Cmd {
 			msg.touchID, msg.err = &t, err
 		}
 		if syncState != nil && msg.err == nil {
+			// One that can't be read is said in its row: the rest of the
+			// panel, Checks among it, stays.
 			s, err := syncState()
-			msg.sync, msg.err = &s, err
+			if err != nil {
+				s.Lines = append(s.Lines, "❌ "+err.Error())
+			}
+			msg.sync = &s
 		}
 		return msg
 	}

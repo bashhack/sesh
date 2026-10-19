@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
@@ -799,5 +800,43 @@ func TestUISyncState(t *testing.T) {
 	st, err := uiSyncState(cfg)
 	if err != nil || !st.On || !strings.HasSuffix(st.Said, "sync") || !slices.Contains(st.Lines, "Changed here, to send:          1") {
 		t.Errorf("syncing: %+v, %v", st, err)
+	}
+}
+
+// A sync folder that can't be read is a line of the app's sync row, not
+// an error; one that doesn't answer isn't waited on.
+func TestUISyncStateTrouble(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	folder := filepath.Join(dir, "sync")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := filepath.Join(folder, "entries")
+	if err := os.RemoveAll(entries); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entries, []byte("not a folder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := uiSyncState(cfg)
+	if err != nil || !slices.ContainsFunc(st.Lines, func(l string) bool { return strings.HasPrefix(l, "❌") }) {
+		t.Errorf("entries not a folder: %+v, %v; want a ❌ line, no error", st, err)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	origRead, origBudget := readDir, autoSyncBudget
+	readDir = func(string) ([]os.DirEntry, error) { <-release; return nil, nil }
+	autoSyncBudget = 50 * time.Millisecond
+	t.Cleanup(func() { readDir, autoSyncBudget = origRead, origBudget })
+	st, err = uiSyncState(cfg)
+	if err != nil || !slices.ContainsFunc(st.Lines, func(l string) bool { return strings.Contains(l, "didn't answer in 50ms") }) {
+		t.Errorf("the folder stuck: %+v, %v", st, err)
 	}
 }

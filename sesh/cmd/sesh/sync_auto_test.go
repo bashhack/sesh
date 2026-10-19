@@ -318,20 +318,20 @@ func TestUISync(t *testing.T) {
 	v := newUIVault(store)
 	off := *cfg
 	off.SyncAuto.Value = false
-	if said, _ := uiSync(&off, v, tui.SyncPull); said != nil {
+	if said, _, _ := uiSync(&off, v, tui.SyncPull); said != nil {
 		t.Errorf("a pull with sync.auto off: %q", said)
 	}
-	if said, ran := uiSync(cfg, v, tui.SyncPush); said != nil || ran {
+	if said, _, ran := uiSync(cfg, v, tui.SyncPush); said != nil || ran {
 		t.Errorf("a push with nothing to send: %q", said)
 	}
-	if said, ran := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." || !ran {
+	if said, _, ran := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." || !ran {
 		t.Errorf("a pull: %q", said)
 	}
 	// The app sees what the pull took, on its own connection.
 	if changed, err := v.Check(); err != nil || !changed {
 		t.Errorf("the app's check after a pull: %v, %v", changed, err)
 	}
-	if said, _ := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
+	if said, _, _ := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
 		t.Errorf("sync now with sync.auto off: %q", said)
 	}
 }
@@ -356,13 +356,13 @@ func TestUISync_WarnsOnce(t *testing.T) {
 	}
 	defer closeAuditStore(store)
 	v := newUIVault(store)
-	if said, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "nothing syncs until") || ran {
+	if said, _, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "nothing syncs until") || ran {
 		t.Fatalf("the first push: %q, ran %v", said, ran)
 	}
-	if said, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 {
 		t.Errorf("the next push: %q", said)
 	}
-	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 {
 		t.Errorf("sync now: %q", said)
 	}
 }
@@ -391,18 +391,18 @@ func TestUISync_FolderStuck(t *testing.T) {
 	}
 	defer closeAuditStore(store)
 	v := newUIVault(store)
-	if said, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "didn't answer") || ran {
+	if said, _, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "didn't answer") || ran {
 		t.Fatalf("the first push: %q, ran %v", said, ran)
 	}
 	time.Sleep(100 * time.Millisecond) // the first read ended
-	if said, _ := uiSync(cfg, v, tui.SyncPush); said != nil || reads.Load() != 1 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncPush); said != nil || reads.Load() != 1 {
 		t.Errorf("the next push: %q, folder read %d times", said, reads.Load())
 	}
-	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || reads.Load() != 2 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || reads.Load() != 2 {
 		t.Errorf("sync now: %q, folder read %d times", said, reads.Load())
 	}
 	// One still waiting isn't joined by another, nor said to be waited for.
-	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "still hasn't answered") || reads.Load() != 2 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "still hasn't answered") || reads.Load() != 2 {
 		t.Errorf("sync now again: %q, folder read %d times", said, reads.Load())
 	}
 }
@@ -424,7 +424,7 @@ func TestUISync_SaveAfterSync(t *testing.T) {
 	}
 	defer closeAuditStore(store)
 	v := newUIVault(store)
-	if _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
+	if _, _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
 		t.Fatal("the pull didn't run")
 	}
 	k, err := vault.ParseKey("password/c")
@@ -466,7 +466,7 @@ func TestUISync_OthersWritesAroundASync(t *testing.T) {
 		t.Helper()
 		sqlExec(t, ddb, `INSERT INTO audit_log (event_type, detail, created_at) VALUES ('test', 'another command', ?)`, time.Now().UTC())
 	}
-	if said, _ := uiSync(cfg, v, tui.SyncPull); len(said) != 1 {
+	if said, _, _ := uiSync(cfg, v, tui.SyncPull); len(said) != 1 {
 		t.Fatalf("the pull: %q", said)
 	}
 	if changed, err := v.Check(); err != nil || !changed {
@@ -477,7 +477,7 @@ func TestUISync_OthersWritesAroundASync(t *testing.T) {
 		t.Errorf("another command's write after: %v, %v", changed, err)
 	}
 	other()
-	if _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
+	if _, _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
 		t.Fatal("the second pull didn't run")
 	}
 	k, err := vault.ParseKey("password/c")

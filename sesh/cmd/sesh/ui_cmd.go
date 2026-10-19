@@ -234,7 +234,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
-		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, bool) { return uiSync(settingsNow(cfg), v, how) },
+		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, []string, bool) { return uiSync(settingsNow(cfg), v, how) },
 		Syncing:      func() bool { return settingsNow(cfg).SyncDir.Value != "" },
 		AutoSync:     func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
 		SyncState:    func() (tui.SyncState, error) { return uiSyncState(settingsNow(cfg)) },
@@ -881,19 +881,19 @@ func (u *uiVault) Close() error { return u.store.Close() }
 // only while sync.auto is on, and to send only when there's a change to;
 // ran says it synced. A warning it said in the last day isn't said again,
 // but when asked for.
-func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ran bool) {
+func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said, all []string, ran bool) {
 	u, ok := v.(*uiVault)
 	if !ok || cfg.SyncDir.Value == "" || how != tui.SyncNow && !cfg.SyncAuto.Value {
-		return nil, false
+		return nil, nil, false
 	}
 	now := time.Now()
 	if how != tui.SyncNow && now.Before(u.stuck()) {
-		return nil, false
+		return nil, nil, false
 	}
 	if how == tui.SyncPush && !vaultHasChanges(cfg, u.store) {
-		return nil, false
+		return nil, nil, false
 	}
-	lines, stuck, ran := autoSyncRun(cfg, u.store)
+	all, stuck, ran := autoSyncRun(cfg, u.store)
 	u.mu.Lock()
 	if stuck {
 		// Not asked again till the next pull would be.
@@ -910,12 +910,12 @@ func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ra
 	}
 	u.mu.Unlock()
 	if how != tui.SyncNow {
-		return freshLines(u.store, lines), ran
+		return freshLines(u.store, all), all, ran
 	}
-	if len(lines) == 0 {
-		lines = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
+	if len(all) == 0 {
+		all = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
 	}
-	return lines, ran
+	return all, all, ran
 }
 
 // uiSyncState is the vault's syncing, for the app's sync row: off, or
@@ -924,8 +924,19 @@ func uiSyncState(cfg *config.Config) (tui.SyncState, error) {
 	if cfg.SyncDir.Value == "" {
 		return tui.SyncState{Said: "off"}, nil
 	}
+	st := tui.SyncState{Said: tildePath(cfg.SyncDir.Value), On: true}
+	// A folder that doesn't answer (a stuck network mount) isn't waited
+	// on, as the app's own syncs aren't.
+	if answered, _ := answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
+		st.Lines = []string{"Sync folder:   " + tildePath(cfg.SyncDir.Value), fmt.Sprintf("⚠️  The sync folder %s %s %s: nothing could be read of it.", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}
+		return st, nil
+	}
 	lines, err := syncStatusLines(cfg)
-	return tui.SyncState{Said: tildePath(cfg.SyncDir.Value), Lines: lines, On: true}, err
+	st.Lines = lines
+	if err != nil {
+		st.Lines = append(st.Lines, "❌ "+err.Error())
+	}
+	return st, nil
 }
 
 // stuck is until when the app's syncs on their own wait for a folder that
