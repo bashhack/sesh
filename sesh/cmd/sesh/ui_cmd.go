@@ -234,10 +234,20 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
-		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, []string, bool) { return uiSync(settingsNow(cfg), v, how) },
-		Syncing:      func() bool { return settingsNow(cfg).SyncDir.Value != "" },
-		AutoSync:     func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
-		SyncState:    func() (tui.SyncState, error) { return uiSyncState(settingsNow(cfg)) },
+		Sync:      func(v tui.Vault, how tui.SyncHow) ([]string, []string, bool) { return uiSync(settingsNow(cfg), v, how) },
+		Syncing:   func() bool { return settingsNow(cfg).SyncDir.Value != "" },
+		AutoSync:  func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
+		SyncState: func() (tui.SyncState, error) { return uiSyncState(settingsNow(cfg)) },
+		StartSync: func(v tui.Vault, dir string) (string, error) {
+			return uiStartSync(settingsNow(cfg), v, dir)
+		},
+		SyncFolderOffer: func() string {
+			if d := iCloudDrive(); d != "" {
+				return tildePath(filepath.Join(d, "sesh-sync"))
+			}
+			return ""
+		},
+		LeaveSync:    func() (string, error) { return leaveSync(settingsNow(cfg)) },
 		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
 		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
@@ -916,6 +926,36 @@ func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said, all []strin
 		all = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
 	}
 	return all, all, ran
+}
+
+// uiStartSync makes dir the sync folder of the app's vault v, as sesh
+// sync init does, then syncs it, and says what it did.
+func uiStartSync(cfg *config.Config, v tui.Vault, dir string) (string, error) {
+	u, ok := v.(*uiVault)
+	if !ok {
+		return "", errors.New("the vault isn't open")
+	}
+	if cfg.SyncDir.Value != "" {
+		return "", fmt.Errorf("this vault syncs with %s already", tildePath(cfg.SyncDir.Value))
+	}
+	if !strings.HasPrefix(dir, "~/") && !filepath.IsAbs(dir) {
+		return "", errors.New("type the folder as a full path, or one from ~/")
+	}
+	dir, err := syncDirArg(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := checkNewSyncDir(dir, cfg.DBPath.Value); err != nil {
+		return "", err
+	}
+	if _, err := makeSyncFolder(cfg, dir, u.store); err != nil {
+		return "", err
+	}
+	said := madeSyncFolderSaid(dir) + "."
+	if lines, _, _ := uiSync(cfg, v, tui.SyncNow); len(lines) > 0 {
+		said += " " + strings.Join(lines, " ")
+	}
+	return said, nil
 }
 
 // uiSyncState is the vault's syncing, for the app's sync row: off, or

@@ -594,7 +594,30 @@ func syncInit(app *App, args []string) error {
 	default:
 		return errors.New("name the folder to sync through: sesh sync init <folder> (in iCloud Drive, Dropbox, or any folder a tool keeps the same on your computers)")
 	}
-	if err := checkSyncDir(dir, cfg.DBPath.Value); err != nil {
+	if err := checkNewSyncDir(dir, cfg.DBPath.Value); err != nil {
+		return err
+	}
+	// Unlocked first: a wrong master password leaves no folder made.
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeAuditStore(store)
+	f, err := makeSyncFolder(cfg, dir, store)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(app.Stdout, madeSyncFolderSaid(dir)); err != nil {
+		return err
+	}
+	return syncStore(app, cfg, f, store)
+}
+
+// checkNewSyncDir checks dir can be made a sync folder for the vault at
+// dbPath: not in or around the vault, not one already, nor one that lost
+// its sesh-sync.json.
+func checkNewSyncDir(dir, dbPath string) error {
+	if err := checkSyncDir(dir, dbPath); err != nil {
 		return err
 	}
 	f := syncfolder.New(dir)
@@ -611,34 +634,39 @@ func syncInit(app *App, args []string) error {
 	} else if len(c.Files)+len(c.NotDownloaded)+len(c.Problems) > 0 {
 		return fmt.Errorf("%s holds entry files but no %s: a sync folder that lost it. On a computer that synced with it, sesh sync (or sesh sync join, once it has left) writes it again; or make a sync folder elsewhere", tildePath(dir), syncfolder.InfoFile)
 	}
-	// Unlocked first: a wrong master password leaves no folder made.
-	store, err := openSQLiteStoreWith(cfg)
-	if err != nil {
-		return err
-	}
-	defer closeAuditStore(store)
+	return nil
+}
+
+// makeSyncFolder makes dir, checked (checkNewSyncDir), the sync folder of
+// the vault open in store, and sets sync.dir to it (in cfg too); the
+// first sync is the caller's.
+func makeSyncFolder(cfg *config.Config, dir string, store *database.Store) (syncfolder.Folder, error) {
+	f := syncfolder.New(dir)
 	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 	if err != nil {
-		return err
+		return f, err
 	}
 	info, err := syncfolder.NewInfo(syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params})
 	if err != nil {
-		return err
+		return f, err
 	}
 	if info.Links, err = store.SyncKeyLinks(); err != nil {
-		return err
+		return f, err
 	}
 	if err := f.WriteInfo(info); err != nil {
-		return err
+		return f, err
 	}
 	if err := setSyncDir(dir); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(app.Stdout, "Made the sync folder %s. On each other computer: sesh sync join %s\n", tildePath(dir), shellPath(dir)); err != nil {
-		return err
+		return f, err
 	}
 	cfg.SyncDir = config.Setting[string]{Value: dir, Source: config.FromFile}
-	return syncStore(app, cfg, f, store)
+	return f, nil
+}
+
+// madeSyncFolderSaid says dir was made a sync folder, and how the other
+// computers join it.
+func madeSyncFolderSaid(dir string) string {
+	return fmt.Sprintf("Made the sync folder %s. On each other computer: sesh sync join %s", tildePath(dir), shellPath(dir))
 }
 
 // setSyncDir writes sync.dir (dir, or "" for none) into the config file.
@@ -1111,19 +1139,28 @@ func syncLeave(app *App) error {
 	if err != nil {
 		return err
 	}
+	said, err := leaveSync(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(app.Stdout, said)
+	return err
+}
+
+// leaveSync stops the vault cfg names syncing, and says so.
+func leaveSync(cfg *config.Config) (string, error) {
 	if cfg.SyncDir.Value == "" {
-		return errNotSyncing
+		return "", errNotSyncing
 	}
 	if cfg.SyncDir.Source == config.FromEnv {
-		return fmt.Errorf("sync.dir comes from %s: unset it", cfg.SyncDir.Origin)
+		return "", fmt.Errorf("sync.dir comes from %s: unset it", cfg.SyncDir.Origin)
 	}
 	if err := setSyncDir(""); err != nil {
-		return err
+		return "", err
 	}
 	said := fmt.Sprintf("This vault no longer syncs with %s. Its entries are as they were, and so is the folder for the other computers; sesh sync join %s joins it again, merging what changed meanwhile.\n", tildePath(cfg.SyncDir.Value), shellPath(cfg.SyncDir.Value))
 	if prev, err := database.VaultKeyChange(cfg.DBPath.Value); err == nil && prev != "" {
 		said += "This computer's master password change hasn't reached the folder: joining it again sends it.\n"
 	}
-	_, err = fmt.Fprint(app.Stdout, said)
-	return err
+	return said, nil
 }

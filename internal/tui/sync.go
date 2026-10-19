@@ -154,8 +154,11 @@ func (m *Model) syncRow(st SyncState) item {
 // syncing now and the last sync's results.
 func (m *Model) openSync(st SyncState) tea.Cmd {
 	if !st.On {
-		m.say("Not syncing: sesh sync init <folder> makes a sync folder from this vault.")
-		return nil
+		if m.opts.StartSync == nil {
+			m.say("Not syncing: sesh sync init <folder> makes a sync folder from this vault.")
+			return nil
+		}
+		return m.startSync()
 	}
 	ov := &overlay{kind: panelMenu, back: m.ov, title: "Sync"}
 	for _, l := range st.Lines {
@@ -168,7 +171,61 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 	if it := m.resultsItem("r"); it != nil {
 		ov.items = append(ov.items, *it)
 	}
+	if leave := m.opts.LeaveSync; leave != nil {
+		settings := m.ov
+		ov.items = append(ov.items, item{key: "x", label: "leave…", stay: true, run: func() tea.Cmd {
+			m.ov = m.confirm(settings, "Sync", "Stop syncing with "+st.Said+"? This vault's entries stay as they are, and so does the folder for your other computers; sesh sync join joins it again, merging what changed meanwhile.", func() tea.Cmd {
+				m.ov = settings
+				return func() tea.Msg {
+					said, err := leave()
+					return syncSetMsg{said: said, err: err}
+				}
+			})
+			m.ov.danger = true
+			return nil
+		}})
+	}
 	m.ov = ov
+	return nil
+}
+
+// syncSetMsg is syncing started or stopped: what was said, or why not.
+type syncSetMsg struct {
+	err  error
+	said string
+}
+
+// startSync asks for the folder to sync through, then makes it the
+// vault's sync folder and syncs, as sesh sync init does.
+func (m *Model) startSync() tea.Cmd {
+	offer := ""
+	if m.opts.SyncFolderOffer != nil {
+		offer = m.opts.SyncFolderOffer()
+	}
+	start := m.opts.StartSync
+	return m.askOver(true, "Start syncing", "Folder", offer, "A folder a sync tool keeps the same on your computers (iCloud Drive, Dropbox, Syncthing), as a full path or from ~/. It's made the sync folder of this vault; on each other computer, sesh sync join it.", nil, func(dir string) (string, tea.Cmd) {
+		if strings.TrimSpace(dir) == "" {
+			return "Type the folder to sync through.", nil
+		}
+		m.say("Making the sync folder…")
+		return "", m.read(func(v Vault, _ func() bool) tea.Msg {
+			said, err := start(v, strings.TrimSpace(dir))
+			return syncSetMsg{said: said, err: err}
+		})
+	})
+}
+
+// gotSyncSet says what starting or stopping syncing did, and shows the
+// settings again as they are now.
+func (m *Model) gotSyncSet(msg syncSetMsg) tea.Cmd {
+	if msg.err != nil {
+		m.sayBad(msg.err.Error())
+	} else {
+		m.say(msg.said)
+	}
+	if m.ov != nil && m.ov.kind == panelSettings {
+		return m.refreshSettings()
+	}
 	return nil
 }
 
