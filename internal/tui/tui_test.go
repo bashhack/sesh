@@ -4169,6 +4169,16 @@ func TestAWSSignInFromTheMenu(t *testing.T) {
 	if c.form == nil || c.form.inputs[0].value() != "from-env" {
 		t.Errorf("the form doesn't start with AWS_PROFILE's profile:\n%s", c.screen())
 	}
+	// Filled in for you, the profile hides none of the others.
+	d := newApp(t, newFake(), Options{AWSSetup: &fakeAWSSetup{}, AWSSignIn: a.opts.AWSSignIn, AWSProfile: func() string { return "work" }})
+	d.press("ctrl+g", "w")
+	if got := d.form.inputs[0].matches(); !slices.Equal(got, []string{"home"}) {
+		t.Errorf("offered %q with work filled in, want home", got)
+	}
+	d.press("backspace")
+	if got := d.form.inputs[0].matches(); !slices.Equal(got, []string{"work"}) {
+		t.Errorf("offered %q once typed over, want what matches", got)
+	}
 	if len(asked) != 2 || asked[1] != vault.AWSKey("") {
 		t.Errorf("the default profile: asked %v", asked)
 	}

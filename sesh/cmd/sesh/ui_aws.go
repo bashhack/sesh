@@ -37,21 +37,21 @@ func uiAWSSignIn(app *App, k vault.Key) (tui.AWSVaultStep, error) {
 		if !ok {
 			return nil, errors.New("the vault can't be read for the sign-in")
 		}
+		// aws login or SSO: nothing of the vault is needed now.
+		if kind != "" && kind != aws.KindRole {
+			shell := func(release func()) error { return runAWSLogin(app, profile, kind, false, release) }
+			return func() (tui.AWSShell, error) { return shell, nil }, nil
+		}
 		e, err := u.store.Lookup(k)
 		has := err == nil
 		if err != nil && !errors.Is(err, vault.ErrNotFound) {
 			return nil, uiLocked(err)
 		}
-		switch kind {
-		case "":
-		case aws.KindRole:
+		if kind == aws.KindRole {
 			if has {
 				return nil, fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; Enter on its entry copies the code", awsProfileName(profile))
 			}
 			return nil, fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; set up AWS MFA… stores its key, and Enter on its entry then copies the code", awsProfileName(profile))
-		default:
-			shell := func(release func()) error { return runAWSLogin(app, profile, kind, false, release) }
-			return func() (tui.AWSShell, error) { return shell, nil }, nil
 		}
 		if !has {
 			return nil, fmt.Errorf("sesh has no MFA key for %s, which signs in with an IAM user's access keys: AWS gives a session for it only with an MFA code; set up AWS MFA… stores the key", awsProfileName(profile))

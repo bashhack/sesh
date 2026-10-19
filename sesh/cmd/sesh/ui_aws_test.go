@@ -132,10 +132,10 @@ func TestUI_AWSSignIn(t *testing.T) {
 	if err != nil || kinds != 1 {
 		t.Fatalf("the kind asked %d times before the vault: %v", kinds, err)
 	}
-	awsProfileKind = was
 	s, err := read(u)
-	if err != nil {
-		t.Fatal(err)
+	awsProfileKind = was
+	if err != nil || kinds != 1 {
+		t.Fatalf("the kind asked %d times in all: %v", kinds, err)
 	}
 	f.err = nil
 	if err := u.Close(); err != nil {
@@ -143,6 +143,14 @@ func TestUI_AWSSignIn(t *testing.T) {
 	}
 	if shell, err := s(); err != nil || shell == nil {
 		t.Errorf("signed in with the vault closed: %v", err)
+	}
+	// aws login reads nothing of the vault: one that can't be read (closed,
+	// here) doesn't stop it.
+	stubSTS(t, f, aws.KindLogin)
+	if read, err := uiAWSSignIn(app, vault.AWSKey("work")); err != nil {
+		t.Fatal(err)
+	} else if s, err := read(u); err != nil || s == nil {
+		t.Errorf("aws login with the vault unreadable: %v", err)
 	}
 	t.Setenv("SESH_ACTIVE", "1")
 	if _, err := signIn(vault.AWSKey("work")); err == nil || !strings.Contains(err.Error(), "shell sesh opened") {

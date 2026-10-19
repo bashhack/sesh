@@ -110,6 +110,7 @@ func (m *Model) awsProfile() string {
 func (m *Model) openAWSSignIn() tea.Cmd {
 	m.ov = nil
 	profile := m.textInput("profile", m.awsProfile())
+	profile.start = profile.value()
 	profile.hint = "the AWS CLI profile, as sesh aws --profile names it; empty for the default profile"
 	f := &form{title: "Sign in to AWS", inputs: []*input{profile}, row: -1, enterDone: "sign in",
 		note: "Signs in with an AWS CLI profile, as sesh aws does, and opens a shell with it once the app ends. A profile with an IAM user's access keys needs its MFA key in sesh (set up AWS MFA… stores one); one that signs in with aws login or SSO doesn't, but without it nothing is copied: if the sign-in asks for an MFA code, it's your MFA device's."}
