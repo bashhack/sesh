@@ -3619,6 +3619,29 @@ func TestAWSMFADevice(t *testing.T) {
 	if c := f.saves[len(f.saves)-1]; c.MFADevice != nil {
 		t.Errorf("unchanged: change = %+v", c)
 	}
+	// Renamed away from aws, the entry still shows the device it has, and
+	// its form can take it out.
+	setDevice(was)
+	focus := func(label string) {
+		t.Helper()
+		i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.label == label })
+		if i < 0 || !a.form.inputs[i].visible() {
+			t.Fatalf("no %s input:\n%s", label, a.screen())
+		}
+		a.form.focusInput(i)
+	}
+	a.press("ctrl+k", "e")
+	focus("name")
+	a.press("ctrl+u", "aws-old", "ctrl+s")
+	if s := a.screen(); f.entries[0].Key.Service != "aws-old" || !strings.Contains(s, "MFA device  arn:aws:iam::") {
+		t.Fatalf("renamed: %+v\n%s", f.entries[0], s)
+	}
+	a.press("ctrl+k", "e")
+	focus("MFA device")
+	a.press("ctrl+u", "ctrl+s")
+	if c := f.saves[len(f.saves)-1]; c.MFADevice == nil || *c.MFADevice != "" {
+		t.Errorf("renamed, taken out: change = %+v", c)
+	}
 	// Another TOTP entry: none.
 	a.press("down", "down", "ctrl+k", "e")
 	if a.form == nil || a.form.title != "Edit "+entryName(&vault.Entry{Key: code}) {
@@ -3626,5 +3649,19 @@ func TestAWSMFADevice(t *testing.T) {
 	}
 	if s := a.screen(); strings.Contains(s, "MFA device") {
 		t.Errorf("another TOTP entry's form has the input:\n%s", s)
+	}
+	a.press("esc")
+	// Added: the input shows once the entry is a TOTP entry named aws.
+	a.press("ctrl+g", "a", "→", "→", "→") // TOTP
+	focus("name")
+	a.press("aws")
+	focus("username")
+	a.press("home")
+	focus("TOTP key, or otpauth:// link")
+	a.press(seed)
+	focus("MFA device")
+	a.press(now, "ctrl+s")
+	if c := f.saves[len(f.saves)-1]; c.Key != (vault.Key{}) || c.To != vault.AWSKey("home") || c.MFADevice == nil || *c.MFADevice != now {
+		t.Errorf("added: change = %+v", c)
 	}
 }
