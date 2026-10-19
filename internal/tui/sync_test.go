@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // syncApp is an app whose vault syncs: each sync's reason goes in hows,
@@ -12,9 +15,9 @@ func syncApp(t *testing.T, f *fakeVault) (a *app, hows *[]SyncHow, said *[]strin
 	t.Helper()
 	hows, said = &[]SyncHow{}, &[]string{}
 	a = newApp(t, f, Options{
-		Sync: func(_ Vault, how SyncHow) ([]string, bool) {
+		Sync: func(_ Vault, how SyncHow) ([]string, []string, bool) {
 			*hows = append(*hows, how)
-			return *said, true
+			return *said, *said, true
 		},
 		Syncing: func() bool { return true },
 	})
@@ -85,7 +88,7 @@ func TestSync_SyncNow(t *testing.T) {
 		t.Errorf("sync now: %v, %q", *hows, a.status)
 	}
 
-	b := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, bool) { return nil, false }, Syncing: func() bool { return false }})
+	b := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, false }, Syncing: func() bool { return false }})
 	b.press("ctrl+g")
 	if strings.Contains(b.screen(), "sync now") {
 		t.Errorf("sync now offered for a vault that doesn't sync:\n%s", b.screen())
@@ -97,7 +100,7 @@ func TestSync_PullsAfterUnlock(t *testing.T) {
 	f := newFake()
 	var hows []SyncHow
 	a := newApp(t, f, Options{
-		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
+		Sync:    func(_ Vault, how SyncHow) ([]string, []string, bool) { hows = append(hows, how); return nil, nil, true },
 		Syncing: func() bool { return true },
 		Unlock:  func([]byte) (Vault, error) { return f, nil },
 	})
@@ -116,7 +119,7 @@ func TestSync_LockMidSync(t *testing.T) {
 	f := newFake()
 	var hows []SyncHow
 	a := newApp(t, f, Options{
-		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
+		Sync:    func(_ Vault, how SyncHow) ([]string, []string, bool) { hows = append(hows, how); return nil, nil, true },
 		Syncing: func() bool { return true },
 		Unlock:  func([]byte) (Vault, error) { return f, nil },
 	})
@@ -136,7 +139,10 @@ func TestSync_LockMidSync(t *testing.T) {
 func TestSync_AutoOff(t *testing.T) {
 	var hows []SyncHow
 	a := newApp(t, newFake(), Options{
-		Sync:     func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, how == SyncNow },
+		Sync: func(_ Vault, how SyncHow) ([]string, []string, bool) {
+			hows = append(hows, how)
+			return nil, nil, how == SyncNow
+		},
 		Syncing:  func() bool { return true },
 		AutoSync: func() bool { return false },
 	})
@@ -170,7 +176,7 @@ func TestSync_HeldByImport(t *testing.T) {
 
 // The menu's "last" is when a sync ran, not when one was looked for.
 func TestSync_LastOnlyWhenRan(t *testing.T) {
-	a := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, bool) { return nil, false }, Syncing: func() bool { return true }})
+	a := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, false }, Syncing: func() bool { return true }})
 	a.tick(time.Second)
 	a.tick(pushEvery)
 	a.press("ctrl+g")
@@ -183,7 +189,7 @@ func TestSync_LastOnlyWhenRan(t *testing.T) {
 func TestSync_OneAtATime(t *testing.T) {
 	var hows []SyncHow
 	a := newApp(t, newFake(), Options{
-		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
+		Sync:    func(_ Vault, how SyncHow) ([]string, []string, bool) { hows = append(hows, how); return nil, nil, true },
 		Syncing: func() bool { return true },
 	})
 	a.now = a.now.Add(time.Second)
@@ -194,5 +200,125 @@ func TestSync_OneAtATime(t *testing.T) {
 	a.run(second)
 	if len(hows) != 1 {
 		t.Errorf("synced %v, want one at a time", hows)
+	}
+}
+
+// The settings panel has a sync row: off, or the folder and when the app
+// last synced; Enter shows what sesh sync status says, with syncing now.
+func TestSync_Row(t *testing.T) {
+	state := SyncState{Said: "off"}
+	a := newApp(t, newFake(), Options{
+		Settings:  func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) { return state, nil },
+		Sync:      func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:   func() bool { return state.On },
+	})
+	a.press("ctrl+g", ",")
+	if s := a.screen(); !strings.Contains(s, "Sync                      off") || !strings.Contains(s, "sesh sync init <folder>") {
+		t.Fatalf("not syncing:\n%s", s)
+	}
+	a.press("esc", "esc")
+	state = SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", "Changed here, to send:          2", "⚠️  1 entry's file is sealed with another master password's key: sync leaves it for the computer that wrote it"}}
+	a.tick(time.Second)
+	a.press("ctrl+g", ",")
+	if s := a.screen(); !strings.Contains(s, "Sync                      ~/sync, synced ") {
+		t.Fatalf("syncing:\n%s", s)
+	}
+	a.press("enter")
+	if s := a.screen(); a.ov == nil || a.ov.title != "Sync" || !strings.Contains(s, "Changed here, to send:          2") || !strings.Contains(s, "1 entry's file is sealed") || !strings.Contains(s, "sync now") {
+		t.Errorf("the sync panel:\n%s", s)
+	}
+}
+
+// Every line the last sync that said something said is kept for its
+// panel, from the sync panel and Ctrl-G's menu; a quiet sync after keeps
+// them.
+func TestSync_Results(t *testing.T) {
+	a, _, said := syncApp(t, newFake())
+	*said = []string{"Synced: 2 taken, 1 sent.", "⚠️  Sync: 1 entry (password/bank/alice) made here, whose secret this vault no longer has as typed here: not sent until it's typed again here."}
+	a.tick(time.Second)
+	*said = nil
+	a.tick(syncEvery)
+	a.press("ctrl+g")
+	if !strings.Contains(a.screen(), "last sync's results (") {
+		t.Fatalf("Ctrl-G's menu:\n%s", a.screen())
+	}
+	a.press("y")
+	if s := a.screen(); a.ov == nil || !strings.HasPrefix(a.ov.title, "Last sync's results, ") || !strings.Contains(s, "Synced: 2 taken, 1 sent.") || !strings.Contains(s, "password/bank/alice") {
+		t.Errorf("the results:\n%s", s)
+	}
+}
+
+// Sync's state that can't be read is said in its row: the rest of the
+// settings panel stays.
+func TestSync_RowError(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return []Setting{{Key: "history.keep", Value: "10"}}, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true}, errors.New("read the sync folder: entries isn't a folder")
+		},
+	})
+	a.press("ctrl+g", ",")
+	if s := a.screen(); !strings.Contains(s, "history.keep") || !strings.Contains(s, "Sync                      ~/sync") {
+		t.Fatalf("the panel:\n%s", s)
+	}
+	a.press("enter")
+	if s := a.screen(); !strings.Contains(s, "entries isn't a folder") {
+		t.Errorf("the sync panel:\n%s", s)
+	}
+}
+
+// The results keep a warning the status line leaves out, said already
+// today; locking forgets them; sync now keeps the sync panel open.
+func TestSync_ResultsWhole(t *testing.T) {
+	warn := "⚠️  Sync: 1 entry (password/bank/alice) made here, whose secret this vault no longer has as typed here: not sent until it's typed again here."
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync"}}, nil
+		},
+		Sync: func(Vault, SyncHow) ([]string, []string, bool) {
+			return []string{"Synced: 1 sent."}, []string{"Synced: 1 sent.", warn}, true
+		},
+		Syncing: func() bool { return true },
+	})
+	a.tick(time.Second)
+	if strings.Contains(a.status, "password/bank") {
+		t.Errorf("status %q: want the warning left out", a.status)
+	}
+	a.press("ctrl+g", "y")
+	if !strings.Contains(a.screen(), "password/bank/alice") {
+		t.Fatalf("the results:\n%s", a.screen())
+	}
+	a.press("esc", "esc", "ctrl+g", ",", "enter", "s")
+	if a.ov == nil || a.ov.title != "Sync" {
+		t.Errorf("after sync now: panel %+v", a.ov)
+	}
+	a.press("esc", "esc", "esc", "ctrl+g", "l")
+	if a.v != nil || a.lastSaid != nil {
+		t.Errorf("after locking: unlocked %v, results kept %q", a.v != nil, a.lastSaid)
+	}
+}
+
+// A line the row cuts is said whole below it, however narrow the window;
+// one it doesn't cut isn't said again.
+func TestSync_LineWholeWhenCut(t *testing.T) {
+	long := "⚠️  1 entry waits for the sync tool to fetch its file: keep the folder downloaded"
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", long}}, nil
+		},
+		Sync:    func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing: func() bool { return true },
+	})
+	a.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	a.press("ctrl+g", ",", "enter")
+	if s := a.screen(); strings.Count(s, "Sync folder:   ~/sync") != 1 {
+		t.Errorf("a short line, selected:\n%s", s)
+	}
+	a.press("down")
+	if s := a.screen(); !strings.Contains(s, "keep the folder downloaded") {
+		t.Errorf("a cut line, selected, at 60 wide:\n%s", s)
 	}
 }

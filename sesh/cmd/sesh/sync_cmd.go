@@ -925,28 +925,39 @@ func syncStatus(app *App) error {
 	if err != nil {
 		return err
 	}
-	if cfg.SyncDir.Value == "" {
-		_, err := fmt.Fprintln(app.Stdout, errNotSyncing.Error()+".")
+	lines, err := syncStatusLines(cfg)
+	if err != nil {
 		return err
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Sync folder:   %s\n", tildePath(cfg.SyncDir.Value))
-	fmt.Fprintf(&b, "This computer: %s\n", cfg.SyncComputerName())
+	if len(lines) > 0 {
+		_, err = fmt.Fprintln(app.Stdout, strings.Join(lines, "\n"))
+	}
+	return err
+}
+
+// syncStatusLines is what sesh sync status says, line by line (a warning
+// or a problem starting ⚠️ or ❌): read without unlocking the vault.
+func syncStatusLines(cfg *config.Config) ([]string, error) {
+	if cfg.SyncDir.Value == "" {
+		return []string{errNotSyncing.Error() + "."}, nil
+	}
+	lines := []string{
+		"Sync folder:   " + tildePath(cfg.SyncDir.Value),
+		"This computer: " + cfg.SyncComputerName(),
+	}
 	if vaultMissing(cfg.DBPath.Value) {
-		fmt.Fprintf(&b, "❌ There's no vault here yet: sesh sync join %s makes it from the folder\n", shellPath(cfg.SyncDir.Value))
-		_, err := fmt.Fprint(app.Stdout, b.String())
-		return err
+		return append(lines, fmt.Sprintf("❌ There's no vault here yet: sesh sync join %s makes it from the folder", shellPath(cfg.SyncDir.Value))), nil
 	}
 	f, folderErr := syncFolderOf(cfg)
 	switch {
 	case errors.Is(folderErr, errInfoLost), errors.Is(folderErr, errKeyToSend), errors.Is(folderErr, errKeyChangedElsewhere), errors.Is(folderErr, errKeyRolledBack), errors.Is(folderErr, errKeyFork):
-		fmt.Fprintf(&b, "⚠️  %v\n", folderErr)
+		lines = append(lines, fmt.Sprintf("⚠️  %v", folderErr))
 	case folderErr != nil:
-		fmt.Fprintf(&b, "❌ %v\n", folderErr)
+		lines = append(lines, fmt.Sprintf("❌ %v", folderErr))
 	}
 	store, err := database.Open(cfg.DBPath.Value, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeAuditStore(store)
 	var folder *syncfolder.Folder
@@ -955,34 +966,33 @@ func syncStatus(app *App) error {
 	}
 	w, err := syncWaitingIn(store, folder)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if w.last != nil {
-		fmt.Fprintf(&b, "Last synced:   %s (%s)\n", w.last.CreatedAt.Local().Format("2006-01-02 15:04"), strings.TrimPrefix(w.last.Detail, "Sync: "))
+		lines = append(lines, fmt.Sprintf("Last synced:   %s (%s)", w.last.CreatedAt.Local().Format("2006-01-02 15:04"), strings.TrimPrefix(w.last.Detail, "Sync: ")))
 	}
-	fmt.Fprintf(&b, "Changed here, to send:          %d\n", w.toSend)
+	lines = append(lines, fmt.Sprintf("Changed here, to send:          %d", w.toSend))
 	if recoveryChanged(cfg) {
-		b.WriteString("Recovery key:                  changed here, to send\n")
+		lines = append(lines, "Recovery key:                  changed here, to send")
 	}
 	if c := w.contents; c != nil {
-		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", w.toTake)
+		lines = append(lines, fmt.Sprintf("Changed in the folder, to take: %d", w.toTake))
 		if info, err := f.ReadInfo(); err != nil {
-			fmt.Fprintf(&b, "❌ %v\n", err)
+			lines = append(lines, fmt.Sprintf("❌ %v", err))
 		} else if err := checkSwitch(store, f, info); err != nil {
-			fmt.Fprintf(&b, "❌ %v\n", err)
+			lines = append(lines, fmt.Sprintf("❌ %v", err))
 		}
 		if w.otherKey > 0 {
-			fmt.Fprintf(&b, "⚠️  %s\n", otherKeySaid(w.otherKey))
+			lines = append(lines, "⚠️  "+otherKeySaid(w.otherKey))
 		}
 		if len(c.NotDownloaded) > 0 {
-			fmt.Fprintf(&b, "⚠️  %s for the sync tool to download their files: keep the sync folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded)\n", nouns(len(c.NotDownloaded), "entry waits", "entries wait"))
+			lines = append(lines, fmt.Sprintf("⚠️  %s for the sync tool to download their files: keep the sync folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded)", nouns(len(c.NotDownloaded), "entry waits", "entries wait")))
 		}
 		for _, p := range c.Problems {
-			fmt.Fprintf(&b, "❌ %s: %s\n", filepath.Base(p.Path), p.Why)
+			lines = append(lines, fmt.Sprintf("❌ %s: %s", filepath.Base(p.Path), p.Why))
 		}
 	}
-	_, err = fmt.Fprint(app.Stdout, b.String())
-	return err
+	return lines, nil
 }
 
 // syncWaiting is what's waiting to sync, read without unlocking the vault.

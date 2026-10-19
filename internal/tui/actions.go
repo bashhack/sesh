@@ -72,6 +72,9 @@ type item struct {
 	does   string // what Enter does to it, when not the panel's usual
 	rule   bool   // a line between groups, before it
 	stay   bool   // running it leaves the panel open
+	// cut says detail is the row's text whole: said only when the row
+	// cuts it.
+	cut bool
 }
 
 // Messages from the actions.
@@ -172,6 +175,9 @@ func (m *Model) seshItems() []item {
 	}
 	if s := m.syncItem(); s != nil {
 		items = append(items, *s)
+	}
+	if r := m.resultsItem("y"); r != nil {
+		items = append(items, *r)
 	}
 	return items
 }
@@ -844,8 +850,12 @@ func (m *Model) drawOverlay(base string) string {
 	// those beside them; with less room than that, they're left out.
 	var detail string
 	itemRoom := room
-	if ov.sel < len(ov.items) && ov.items[ov.sel].detail != "" && !ov.loading && room >= 5 {
-		said := strings.Split(th.dimmed().Width(w-6).Render(ov.items[ov.sel].detail), "\n")
+	var sel *item
+	if ov.sel < len(ov.items) {
+		sel = &ov.items[ov.sel]
+	}
+	if sel != nil && sel.detail != "" && (!sel.cut || lipgloss.Width(sel.label) > w-12) && !ov.loading && room >= 5 {
+		said := strings.Split(th.dimmed().Width(w-6).Render(sel.detail), "\n")
 		if most := room - 3; len(said) > most {
 			cut := len(said) - most + 1
 			said = append(said[:most-1], th.dimmed().Render(fmt.Sprintf("… and %d more %s", cut, plural(cut, "line", "lines"))))

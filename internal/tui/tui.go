@@ -369,12 +369,16 @@ type Options struct {
 	PasswordChangeNote func() string
 	// Sync syncs the vault v with its sync folder, asking nothing, for
 	// how's reason, and says what it did, line by line (a warning or a
-	// problem starting ⚠️ or ❌), nothing when nothing moved; ran says it
-	// synced. Syncing says whether the vault syncs now, AutoSync whether
+	// problem starting ⚠️ or ❌), nothing when nothing moved: said, less a
+	// warning said in the last day, for the status line, and all of it
+	// for the sync results; ran says it synced. Syncing says whether the vault syncs now, AutoSync whether
 	// on its own. nil: the app doesn't sync.
-	Sync     func(v Vault, how SyncHow) (said []string, ran bool)
+	Sync     func(v Vault, how SyncHow) (said, all []string, ran bool)
 	Syncing  func() bool
 	AutoSync func() bool
+	// SyncState says the vault's syncing, for the sync row in the
+	// settings: off, or what sesh sync status says. nil: no sync row.
+	SyncState func() (SyncState, error)
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -420,9 +424,13 @@ type Model struct {
 	// and looked for its own to send; lastSynced, when a sync last
 	// finished (syncing says one is under way).
 	lastPull, lastPush, lastSynced time.Time
-	statusUntil                    time.Time
-	lastKeepAlive                  time.Time
-	clipUntil                      time.Time // when the clipboard clears what was copied
+	// lastSaid is what the last sync that said something said, line by
+	// line, and lastSaidAt when; for the sync results panel.
+	lastSaid      []string
+	lastSaidAt    time.Time
+	statusUntil   time.Time
+	lastKeepAlive time.Time
+	clipUntil     time.Time // when the clipboard clears what was copied
 
 	quitErr error
 	// afterword is said once the app has ended.
@@ -660,9 +668,11 @@ type (
 	}
 	checkedMsg struct {
 		err error
-		// synced is what a sync before the check said; didSync, that one
-		// was run for, and ran that it synced.
+		// synced is what a sync before the check said, for the status
+		// line, and all, all of it; didSync, that one was run for, and ran
+		// that it synced.
 		synced  []string
+		all     []string
 		epoch   int
 		changed bool
 		didSync bool
@@ -963,6 +973,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		if msg.didSync {
 			m.saySynced(msg.synced)
+			if len(msg.all) > 0 {
+				m.lastSaid, m.lastSaidAt = msg.all, m.opts.Now()
+			}
 		}
 		if msg.changed {
 			// Entries may have changed, keys with them: read again. A
@@ -1093,6 +1106,7 @@ func lockedReason(err error) string {
 // lock wipes what the app holds and shows the locked screen, saying why;
 // the vault is closed once the reads still running end.
 func (m *Model) lock(why string) tea.Cmd {
+	m.lastSaid, m.lastSaidAt = nil, time.Time{}
 	var closing tea.Cmd
 	if m.v != nil {
 		closing = m.v.shut()

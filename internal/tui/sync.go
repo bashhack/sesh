@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // SyncHow is why the app syncs the vault with its sync folder.
@@ -69,13 +71,13 @@ func (m *Model) syncNow() tea.Cmd {
 func (m *Model) checkAfter(how SyncHow, sync bool) tea.Cmd {
 	epoch, run := m.epoch, m.opts.Sync
 	read := m.read(func(v Vault, _ func() bool) tea.Msg {
-		var said []string
+		var said, all []string
 		var ran bool
 		if sync {
-			said, ran = run(v, how)
+			said, all, ran = run(v, how)
 		}
 		changed, err := v.Check()
-		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, didSync: sync, ran: ran}
+		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, all: all, didSync: sync, ran: ran}
 	})
 	// A vault closed before it ran (locked) still ends the sync, so the
 	// next can run.
@@ -114,4 +116,89 @@ func (m *Model) syncItem() *item {
 		label += " (last " + m.lastSynced.Local().Format("15:04") + ")"
 	}
 	return &item{key: "s", label: label, run: m.syncNow}
+}
+
+// SyncState is the vault's syncing, as the sync row shows it.
+type SyncState struct {
+	// Said is its state in a few words: "off", or the sync folder.
+	Said string
+	// Lines are what sesh sync status says, line by line: a warning or a
+	// problem starting ⚠️ or ❌.
+	Lines []string
+	// On says the vault syncs.
+	On bool
+}
+
+// syncRow is the settings panel's row for syncing.
+func (m *Model) syncRow(st SyncState) item {
+	said := st.Said
+	if st.On && !m.lastSynced.IsZero() {
+		said += ", synced " + m.lastSynced.Local().Format("15:04")
+	}
+	detail := "Not syncing with other computers. sesh sync init <folder> makes a sync folder from this vault; on another computer, sesh sync join <folder>."
+	does := "see how"
+	if st.On {
+		detail = strings.Join(st.Lines, "\n")
+		does = "see it"
+	}
+	return item{
+		label:  fmt.Sprintf("%-25s %s", "Sync", said),
+		detail: detail,
+		does:   does,
+		run:    func() tea.Cmd { return m.openSync(st) },
+		stay:   true,
+	}
+}
+
+// openSync shows the vault's syncing: what sesh sync status says, then
+// syncing now and the last sync's results.
+func (m *Model) openSync(st SyncState) tea.Cmd {
+	if !st.On {
+		m.say("Not syncing: sesh sync init <folder> makes a sync folder from this vault.")
+		return nil
+	}
+	ov := &overlay{kind: panelMenu, back: m.ov, title: "Sync"}
+	for _, l := range st.Lines {
+		ov.items = append(ov.items, m.lineItem(l))
+	}
+	if it := m.syncItem(); it != nil {
+		it.rule, it.stay = true, true
+		ov.items = append(ov.items, *it)
+	}
+	if it := m.resultsItem("r"); it != nil {
+		ov.items = append(ov.items, *it)
+	}
+	m.ov = ov
+	return nil
+}
+
+// lineItem is a line of what sync said, as a row: marked as gone wrong
+// when it's a warning or a problem, the whole of it below while selected.
+func (m *Model) lineItem(l string) item {
+	label := l
+	if strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌") {
+		label = lipgloss.NewStyle().Foreground(m.th.warn).Render(l)
+	}
+	// Whole below only when the row cuts it.
+	return item{label: label, detail: l, cut: true, stay: true, run: func() tea.Cmd { return nil }}
+}
+
+// resultsItem opens what the last sync that said something said; nil
+// when none has yet.
+func (m *Model) resultsItem(key string) *item {
+	if len(m.lastSaid) == 0 {
+		return nil
+	}
+	return &item{key: key, label: "last sync's results (" + m.lastSaidAt.Local().Format("15:04") + ")…", stay: true, run: m.openResults}
+}
+
+// openResults lists every line the last sync that said something said,
+// each one whole below it while selected.
+func (m *Model) openResults() tea.Cmd {
+	ov := &overlay{kind: panelMenu, back: m.ov, title: "Last sync's results, " + m.lastSaidAt.Local().Format("2006-01-02 15:04")}
+	for _, l := range m.lastSaid {
+		ov.items = append(ov.items, m.lineItem(l))
+	}
+	m.ov = ov
+	return nil
 }

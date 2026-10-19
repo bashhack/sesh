@@ -236,11 +236,15 @@ func keptOwnFork(cfg *config.Config, f syncfolder.Folder) (bool, error) {
 	return true, keepOwnFork(cfg, f, info, m)
 }
 
-// probing are the folders an answers is still waiting on.
-var probing = struct {
+// probes are the folders a look (answers) is still waiting on.
+type probes struct {
 	dirs map[string]bool
 	sync.Mutex
-}{dirs: map[string]bool{}}
+}
+
+// probing are the syncs' looks; statusProbing, the app's sync row's, kept
+// apart so neither takes the other's for a folder that isn't answering.
+var probing, statusProbing = &probes{dirs: map[string]bool{}}, &probes{dirs: map[string]bool{}}
 
 // readDir reads a folder, for answers; tests make one that doesn't answer.
 var readDir = os.ReadDir
@@ -251,21 +255,26 @@ var readDir = os.ReadDir
 // waited says it waited for it: not when an earlier look is still
 // waiting.
 func answers(dir string, limit time.Duration) (answered, waited bool) {
+	return probing.answers(dir, limit)
+}
+
+// answers is answers, for the looks in p.
+func (p *probes) answers(dir string, limit time.Duration) (answered, waited bool) {
 	// One still waiting on it means it isn't answering: no other is
 	// started, to wait beside it.
-	probing.Lock()
-	if probing.dirs[dir] {
-		probing.Unlock()
+	p.Lock()
+	if p.dirs[dir] {
+		p.Unlock()
 		return false, false
 	}
-	probing.dirs[dir] = true
-	probing.Unlock()
+	p.dirs[dir] = true
+	p.Unlock()
 	done, read := make(chan struct{}), readDir
 	go func() {
 		_, _ = read(dir) //nolint:errcheck // only how long it takes
-		probing.Lock()
-		delete(probing.dirs, dir)
-		probing.Unlock()
+		p.Lock()
+		delete(p.dirs, dir)
+		p.Unlock()
 		close(done)
 	}()
 	select {
