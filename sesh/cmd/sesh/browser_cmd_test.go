@@ -14,22 +14,28 @@ import (
 )
 
 // browserSetup is a home with Chrome's and Firefox's folders, and a sesh
-// (a script printing what it's given) for the browser's script to run.
+// (a script printing what it's given, at a path with a space, which the
+// script must quote) for the browser's script to run.
 func browserSetup(t *testing.T) (homes []browserHome, script, sesh string) {
+	return browserSetupAt(t, "my sesh")
+}
+
+// browserSetupAt is browserSetup, its sesh named name.
+func browserSetupAt(t *testing.T, name string) (homes []browserHome, script, sesh string) {
 	t.Helper()
 	home := t.TempDir()
 	goos := runtime.GOOS
 	if goos != "darwin" && goos != "linux" {
 		t.Skip("browsers are set up on macOS and Linux")
 	}
-	homes = browserHomes(goos, home)
+	homes = browserHomes(goos, home, "")
 	for _, b := range homes {
-		if err := os.MkdirAll(b.root, 0o700); err != nil {
+		if err := os.MkdirAll(b.roots[0], 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	dir := t.TempDir()
-	sesh = filepath.Join(dir, "my sesh")                                                  // a space, which the script must quote
+	sesh = filepath.Join(dir, name)
 	if err := os.WriteFile(sesh, []byte("#!/bin/sh\necho \"$@\"\n"), 0o700); err != nil { //nolint:gosec // a test program
 		t.Fatal(err)
 	}
@@ -72,7 +78,7 @@ func TestBrowser_Install(t *testing.T) {
 		t.Errorf("the script ran sesh with %q, %v", out, err)
 	}
 	// Only browsers there are set up; with none, it says so.
-	for _, dir := range []string{homes[1].root, homes[1].hosts} {
+	for _, dir := range append(homes[1].roots, homes[1].hosts) {
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +87,7 @@ func TestBrowser_Install(t *testing.T) {
 	if err := browserInstall(app, homes, script); err != nil || strings.Contains(app.Stdout.(*bytes.Buffer).String(), homes[1].name) {
 		t.Errorf("one browser: %v\n%s", err, app.Stdout)
 	}
-	if err := os.RemoveAll(homes[0].root); err != nil {
+	if err := os.RemoveAll(homes[0].roots[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := browserInstall(agentTestApp(), homes, script); err == nil || !strings.Contains(err.Error(), "found neither Chrome nor Firefox") {
@@ -113,6 +119,14 @@ func TestBrowser_Uninstall(t *testing.T) {
 	if _, err := os.Stat(theirs); err != nil || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "not sesh's script") {
 		t.Errorf("another program's file: %v\n%s", err, app.Stderr)
 	}
+	// One that can't be read is left, and said so.
+	if err := os.WriteFile(theirs, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app = agentTestApp()
+	if err := browserUninstall(app, homes, script); err != nil || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "it can't be read") {
+		t.Errorf("an unreadable file: %v\n%s", err, app.Stderr)
+	}
 	app = agentTestApp()
 	if err := os.Remove(theirs); err != nil {
 		t.Fatal(err)
@@ -135,6 +149,7 @@ func TestBrowser_Doctor(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	row := func() string {
 		t.Helper()
 		var c doctorChecks
@@ -144,10 +159,11 @@ func TestBrowser_Doctor(t *testing.T) {
 	if got := row(); !strings.Contains(got, "-     Browser         the extension isn't set up") {
 		t.Errorf("not set up: %q", got)
 	}
-	_, _, sesh := browserSetup(t)
-	homes := browserHomes(runtime.GOOS, home)
+	// A sesh whose path needs no quoting, as Homebrew's /opt/homebrew/bin/sesh.
+	_, _, sesh := browserSetupAt(t, "sesh")
+	homes := homesHere(home)
 	for _, b := range homes {
-		if err := os.MkdirAll(b.root, 0o700); err != nil {
+		if err := os.MkdirAll(b.roots[0], 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -168,6 +184,18 @@ func TestBrowser_Doctor(t *testing.T) {
 	if got := row(); !strings.Contains(got, "warn  Browser") || !strings.Contains(got, "which isn't there") {
 		t.Errorf("sesh gone: %q", got)
 	}
+	if err := os.Remove(script); err != nil {
+		t.Fatal(err)
+	}
+	if got := row(); !strings.Contains(got, "is missing or can't be run") {
+		t.Errorf("the script gone: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(homes[1].hosts, browserHostName+".json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := row(); !strings.Contains(got, "Firefox's file can't be read") {
+		t.Errorf("an unreadable file: %q", got)
+	}
 	theirs := filepath.Join(homes[0].hosts, browserHostName+".json")
 	if err := os.WriteFile(theirs, []byte(`{"path":"/opt/other/host"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -177,21 +205,68 @@ func TestBrowser_Doctor(t *testing.T) {
 	}
 }
 
-// The browsers' folders, as their docs give them, on each system.
+// The browsers' folders, as their docs give them, on each system: where
+// hosts' files go, and where each browser is known to be there by
+// (Firefox by its profiles, as it no longer makes its old folders).
 func TestBrowser_Homes(t *testing.T) {
-	for goos, want := range map[string][]string{
-		"darwin": {"/h/Library/Application Support/Google/Chrome/NativeMessagingHosts", "/h/Library/Application Support/Mozilla/NativeMessagingHosts"},
-		"linux":  {"/h/.config/google-chrome/NativeMessagingHosts", "/h/.mozilla/native-messaging-hosts"},
+	for _, tc := range []struct {
+		goos, xdg string
+		want      []string
+	}{
+		{"darwin", "", []string{
+			"/h/Library/Application Support/Google/Chrome/NativeMessagingHosts if /h/Library/Application Support/Google/Chrome",
+			"/h/Library/Application Support/Mozilla/NativeMessagingHosts if /h/Library/Application Support/Firefox, /h/Library/Application Support/Mozilla",
+		}},
+		{"linux", "", []string{
+			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla",
+		}},
+		{"linux", "/x", []string{
+			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /x/mozilla",
+		}},
+		{"linux", "relative", []string{
+			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla",
+		}},
 	} {
 		var got []string
-		for _, b := range browserHomes(goos, "/h") {
-			got = append(got, b.hosts)
+		for _, b := range browserHomes(tc.goos, "/h", tc.xdg) {
+			got = append(got, b.hosts+" if "+strings.Join(b.roots, ", "))
 		}
-		if strings.Join(got, ", ") != strings.Join(want, ", ") {
-			t.Errorf("%s: %q, want %q", goos, got, want)
+		if strings.Join(got, "; ") != strings.Join(tc.want, "; ") {
+			t.Errorf("%s %q: %q, want %q", tc.goos, tc.xdg, got, tc.want)
 		}
 	}
-	if browserHomes("windows", "/h") != nil {
+	if browserHomes("windows", "/h", "") != nil {
 		t.Error("windows has browsers set up")
+	}
+}
+
+// Firefox is found by its profiles' folder alone: a fresh Firefox makes no
+// other; the hosts folder is made.
+func TestBrowser_InstallFindsAFreshFirefox(t *testing.T) {
+	homes, script, _ := browserSetup(t)
+	for _, b := range homes {
+		for _, r := range b.roots {
+			if err := os.RemoveAll(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	firefox := homes[1]
+	profiles := firefox.roots[0]
+	if runtime.GOOS == "linux" {
+		profiles = firefox.roots[1] // ~/.config/mozilla, Firefox 147's
+	}
+	if err := os.MkdirAll(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	app := agentTestApp()
+	if err := browserInstall(app, homes, script); err != nil {
+		t.Fatalf("a fresh Firefox: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(firefox.hosts, browserHostName+".json")); err != nil {
+		t.Errorf("Firefox's file: %v\n%s", err, app.Stdout)
 	}
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/bashhack/sesh/internal/atomicfile"
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/shell"
 )
 
 const browserUsage = `Usage:
@@ -36,32 +35,55 @@ const (
 	firefoxExtensionID = "sesh@bashhack.github.io"
 )
 
-// browserHome is a browser whose native messaging hosts sesh sets up: its
-// folder (from home), there when the browser has been run, and the folder
-// for hosts inside it; firefox says which kind of file it takes.
+// browserHome is a browser whose native messaging hosts sesh sets up:
+// roots are the folders that are there once it's been run (any one will
+// do), hosts the folder it reads hosts' files from, and firefox says which
+// kind of file it takes.
 type browserHome struct {
-	name, root, hosts string
-	firefox           bool
+	name, hosts string
+	roots       []string
+	firefox     bool
 }
 
 // browserHomes are the browsers sesh sets up on goos, as their docs give
 // the folders (Chrome: developer.chrome.com, native messaging; Firefox:
-// MDN, native manifests).
-func browserHomes(goos, home string) []browserHome {
+// MDN, native manifests). Firefox reads hosts' files from its old
+// folders, which it no longer makes itself: it's known to be there by its
+// profiles' folder (on Linux, ~/.mozilla, or $XDG_CONFIG_HOME/mozilla
+// from Firefox 147), and sesh makes the hosts folder.
+func browserHomes(goos, home, xdgConfig string) []browserHome {
 	switch goos {
 	case "darwin":
 		as := filepath.Join(home, "Library", "Application Support")
 		return []browserHome{
-			{name: "Chrome", root: filepath.Join(as, "Google", "Chrome"), hosts: filepath.Join(as, "Google", "Chrome", "NativeMessagingHosts")},
-			{name: "Firefox", root: filepath.Join(as, "Mozilla"), hosts: filepath.Join(as, "Mozilla", "NativeMessagingHosts"), firefox: true},
+			{name: "Chrome", roots: []string{filepath.Join(as, "Google", "Chrome")}, hosts: filepath.Join(as, "Google", "Chrome", "NativeMessagingHosts")},
+			{name: "Firefox", roots: []string{filepath.Join(as, "Firefox"), filepath.Join(as, "Mozilla")}, hosts: filepath.Join(as, "Mozilla", "NativeMessagingHosts"), firefox: true},
 		}
 	case "linux":
+		if xdgConfig == "" || !filepath.IsAbs(xdgConfig) {
+			xdgConfig = filepath.Join(home, ".config")
+		}
 		return []browserHome{
-			{name: "Chrome", root: filepath.Join(home, ".config", "google-chrome"), hosts: filepath.Join(home, ".config", "google-chrome", "NativeMessagingHosts")},
-			{name: "Firefox", root: filepath.Join(home, ".mozilla"), hosts: filepath.Join(home, ".mozilla", "native-messaging-hosts"), firefox: true},
+			{name: "Chrome", roots: []string{filepath.Join(home, ".config", "google-chrome")}, hosts: filepath.Join(home, ".config", "google-chrome", "NativeMessagingHosts")},
+			{name: "Firefox", roots: []string{filepath.Join(home, ".mozilla"), filepath.Join(xdgConfig, "mozilla")}, hosts: filepath.Join(home, ".mozilla", "native-messaging-hosts"), firefox: true},
 		}
 	}
 	return nil
+}
+
+// browserThere says whether b has been run here: one of its folders is.
+func browserThere(b *browserHome) bool {
+	for _, r := range b.roots {
+		if fi, err := os.Stat(r); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// homesHere are the browsers sesh sets up on this system.
+func homesHere(home string) []browserHome {
+	return browserHomes(runtime.GOOS, home, os.Getenv("XDG_CONFIG_HOME"))
 }
 
 // hostManifest is the file that tells a browser about sesh's host.
@@ -105,9 +127,9 @@ func runBrowser(app *App, args []string) error {
 	script := filepath.Join(dataDir, "browser-host")
 	switch args[0] {
 	case "install":
-		return browserInstall(app, browserHomes(runtime.GOOS, home), script)
+		return browserInstall(app, homesHere(home), script)
 	case "uninstall":
-		return browserUninstall(app, browserHomes(runtime.GOOS, home), script)
+		return browserUninstall(app, homesHere(home), script)
 	}
 	return fmt.Errorf("sesh browser takes install or uninstall, not %q", args[0])
 }
@@ -117,7 +139,7 @@ func runBrowser(app *App, args []string) error {
 func browserInstall(app *App, homes []browserHome, script string) error {
 	var found []browserHome
 	for _, b := range homes {
-		if fi, err := os.Stat(b.root); err == nil && fi.IsDir() {
+		if browserThere(&b) {
 			found = append(found, b)
 		}
 	}
@@ -131,7 +153,8 @@ func browserInstall(app *App, homes []browserHome, script string) error {
 	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
 		return err
 	}
-	body := "#!/bin/sh\n# Written by sesh browser install: the browser starts this for sesh's extension.\nexec " + shell.Quote(sesh) + " browser-host \"$@\"\n"
+	// Quoted always, so sesh doctor reads the path back whatever it is.
+	body := "#!/bin/sh\n# Written by sesh browser install: the browser starts this for sesh's extension.\nexec '" + strings.ReplaceAll(sesh, "'", `'\''`) + "' browser-host \"$@\"\n"
 	if err := atomicfile.Write(script, []byte(body), 0o700); err != nil { //nolint:gosec // the script must be run
 		return fmt.Errorf("write %s: %w", script, err)
 	}
@@ -167,7 +190,11 @@ func browserUninstall(app *App, homes []browserHome, script string) error {
 			return err
 		}
 		var m hostManifest
-		if json.Unmarshal(data, &m) != nil || m.Path != script {
+		switch {
+		case json.Unmarshal(data, &m) != nil:
+			fmt.Fprintf(app.Stderr, "Left %s: it can't be read, so it may not be sesh's\n", file) //nolint:errcheck // a status line
+			continue
+		case m.Path != script:
 			fmt.Fprintf(app.Stderr, "Left %s: it starts %s, not sesh's script\n", file, m.Path) //nolint:errcheck // a status line
 			continue
 		}
@@ -201,6 +228,10 @@ func stableSeshPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// go run's sesh is deleted when it ends: the browser couldn't start it.
+	if strings.Contains(exe, string(filepath.Separator)+"go-build") {
+		return "", errors.New("this sesh is a go run build, gone once it ends: run sesh browser install with an installed sesh")
+	}
 	resolved, err := filepath.EvalSymlinks(exe)
 	if err != nil {
 		return "", err
@@ -231,7 +262,7 @@ func checkBrowser(c *doctorChecks) {
 	}
 	script := filepath.Join(dataDir, "browser-host")
 	var set, wrong []string
-	for _, b := range browserHomes(runtime.GOOS, home) {
+	for _, b := range homesHere(home) {
 		data, err := os.ReadFile(filepath.Join(b.hosts, browserHostName+".json")) //nolint:gosec // the browser's folder
 		if errors.Is(err, os.ErrNotExist) {
 			continue
