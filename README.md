@@ -94,7 +94,7 @@ later commands don't ask again until it locks itself.
 
 ### Prerequisites
 
-- **AWS sign-in:** the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), installed and configured with at least one profile.
+- **AWS sign-in:** the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), installed. A profile with access keys is set up with `aws configure`; one that signs in with `aws login` needs nothing first: `sesh aws` runs `aws login`, which sets it up.
 - **TOTP codes:** nothing more; any service that uses standard TOTP (RFC 6238).
 - **Copying on Linux:** `wl-copy` (wl-clipboard) under Wayland, or `xclip` or `xsel` under X11. macOS has one built in.
 

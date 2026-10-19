@@ -263,13 +263,26 @@ jobs:
             exit 1
           fi
 
+      # A tag with notes written for it (.github/release-notes/<tag>.md),
+      # such as the first, which has no tag before it to list commits
+      # since, is released with them; another, with the changelog of its
+      # commits since the last tag.
+      - name: Choose the release notes
+        id: notes
+        run: |
+          f=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$f" ]; then
+            echo "Release notes: $f"
+            echo "args=--release-notes=$f" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           # v2 keeps the brews section, deprecated since 2.10.
           version: "~> v2"
-          args: release --clean
+          args: release --clean ${{ steps.notes.outputs.args }}
           workdir: .
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
