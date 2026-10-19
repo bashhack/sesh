@@ -3656,10 +3656,14 @@ func TestAWSMFADevice(t *testing.T) {
 		t.Errorf("another TOTP entry's form has the input:\n%s", s)
 	}
 	a.press("esc")
-	// Added: the input shows once the entry is a TOTP entry named aws.
+	// Added: the input shows once the entry is an AWS profile's, a TOTP
+	// entry named aws with the profile as its username.
 	a.press("ctrl+g", "a", "→", "→", "→") // TOTP
 	focus("name")
 	a.press("aws")
+	if i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.label == "MFA device" }); a.form.inputs[i].visible() {
+		t.Errorf("the input shows for aws with no username, which sesh aws never reads:\n%s", a.screen())
+	}
 	focus("username")
 	a.press("home")
 	focus("TOTP key, or otpauth:// link")

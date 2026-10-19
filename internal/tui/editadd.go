@@ -171,7 +171,8 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	device := m.textInput("MFA device", e.Settings.AWSMFADevice)
 	device.hint = "the authenticator app's ARN in AWS (arn:aws:iam::ACCOUNT:mfa/NAME), for a profile with access keys; empty: sesh asks AWS for it"
 	device.shown = func() bool {
-		return e.Settings.AWSMFADevice != "" || kind() == vault.KindTOTP && name.value() == vault.AWSKey("").Service
+		k := vault.Key{Kind: kind(), Service: name.value(), Username: user.value()}
+		return e.Settings.AWSMFADevice != "" || k == vault.AWSKey(k.Username)
 	}
 
 	url := m.textInput("URL", e.URL)

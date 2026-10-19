@@ -358,10 +358,11 @@ func plannedKey(from vault.Key, f *editFlags, set map[string]bool) (vault.Key, e
 }
 
 // checkEditDevice refuses --mfa-device that isn't an authenticator app's
-// ARN, or for an entry that isn't an AWS profile's MFA entry,
-// totp/aws/<profile>, as it's named after the edit (one that has a device
-// can still have it changed or taken out). current is the entry as it
-// is, nil before it's read: then only what the name says is checked.
+// ARN, or, once the entry is read (current), for one that isn't an AWS
+// profile's MFA entry, totp/aws/<profile>, as it's named after the edit;
+// one that has a device can still have it changed or taken out. Before
+// it's read (current nil) only the ARN is checked, so naming the entry by
+// its ID or by words is refused alike.
 func checkEditDevice(to vault.Key, f *editFlags, set map[string]bool, current *vault.Entry) error {
 	if !set["mfa-device"] {
 		return nil
@@ -371,11 +372,8 @@ func checkEditDevice(to vault.Key, f *editFlags, set map[string]bool, current *v
 			return fmt.Errorf("--mfa-device: %w", err)
 		}
 	}
-	switch {
-	case to == vault.AWSKey(to.Username):
+	if current == nil || to == vault.AWSKey(to.Username) || current.Settings.AWSMFADevice != "" {
 		return nil
-	case current == nil && to.Kind == vault.KindTOTP, current != nil && current.Settings.AWSMFADevice != "":
-		return nil // perhaps one with a device, read once unlocked
 	}
 	return fmt.Errorf("--mfa-device is for an AWS profile's MFA entry, totp/aws/<profile>, which %s isn't", to)
 }

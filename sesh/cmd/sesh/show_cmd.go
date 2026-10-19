@@ -283,7 +283,7 @@ func (s *shownEntry) writeJSON(app *App, reveal bool) error {
 		Notes     *string   `json:"notes,omitempty"`
 		Encoding  string    `json:"encoding,omitempty"`
 		FileName  string    `json:"file_name,omitempty"`
-		MFADevice string    `json:"mfa_device,omitempty"`
+		MFADevice string    `json:"aws_mfa_device,omitempty"`
 		ID        string    `json:"id"`
 		Kind      string    `json:"kind"`
 		Service   string    `json:"service"`

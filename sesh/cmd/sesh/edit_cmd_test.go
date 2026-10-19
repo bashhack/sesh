@@ -137,7 +137,6 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 		"password/a --generate --length 3": "--length: password length 3 is too short for 4 required character sets",
 		"nope":                             "nothing to change",
 		"totp/aws/work --mfa-device arn:aws:iam::123456789012:u2f/key": "--mfa-device: that isn't an authenticator app's ARN",
-		"password/a --mfa-device arn:aws:iam::123456789012:mfa/me":     "--mfa-device is for an AWS profile's MFA entry",
 	} {
 		if _, _, err := runEditOut(t, "", false, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
@@ -327,7 +326,7 @@ func TestEdit_MFADevice(t *testing.T) {
 	if out, err := runShowOut(t, "totp/aws/work"); err != nil || !regexp.MustCompile(`(?m)^  MFA device +`+regexp.QuoteMeta(arn)+`$`).MatchString(out) {
 		t.Errorf("show:\n%s (%v)", out, err)
 	}
-	if out, err := runShowOut(t, "totp/aws/work", "--json"); err != nil || !strings.Contains(out, `"mfa_device": "`+arn+`"`) {
+	if out, err := runShowOut(t, "totp/aws/work", "--json"); err != nil || !strings.Contains(out, `"aws_mfa_device": "`+arn+`"`) {
 		t.Errorf("show --json:\n%s (%v)", out, err)
 	}
 	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--mfa-device", arn); err == nil || !strings.Contains(err.Error(), "already has that MFA device") {
@@ -337,6 +336,12 @@ func TestEdit_MFADevice(t *testing.T) {
 	// once it's read.
 	if _, _, err := runEditOut(t, "", false, "totp/github/alice", "--mfa-device", arn); err == nil || !strings.Contains(err.Error(), "--mfa-device is for an AWS profile's MFA entry") {
 		t.Errorf("another TOTP entry: %v", err)
+	}
+	// Named by its ID or by words, refused alike.
+	for _, words := range [][]string{{"password/gitlab"}, {"gitlab"}} {
+		if _, _, err := runEditOut(t, "", false, append(words, "--mfa-device", arn)...); err == nil || !strings.Contains(err.Error(), "--mfa-device is for an AWS profile's MFA entry") {
+			t.Errorf("%q: %v", words, err)
+		}
 	}
 	// Renamed away with its device, it can still have it taken out.
 	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--rename", "aws-old", "--force"); err != nil {
