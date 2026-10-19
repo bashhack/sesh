@@ -865,3 +865,50 @@ func TestUISyncStateBesideASync(t *testing.T) {
 		t.Errorf("with a sync's look waiting: %+v, %v; want the folder read", st, err)
 	}
 }
+
+// The app starts syncing its open vault through a folder typed, as sesh
+// sync init does, and leaves it as sesh sync leave does; a relative path
+// is refused.
+func TestUIStartAndLeaveSync(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if _, err := uiStartSync(cfg, v, "sync"); err == nil || !strings.Contains(err.Error(), "full path") {
+		t.Errorf("a relative path: %v", err)
+	}
+	if _, err := uiStartSync(cfg, v, filepath.Dir(cfg.DBPath.Value)); err == nil || !strings.Contains(err.Error(), "vault") {
+		t.Errorf("the vault's own folder: %v", err)
+	}
+	folder := filepath.Join(dir, "sync")
+	said, err := uiStartSync(cfg, v, folder)
+	if err != nil || !strings.Contains(said, "Made the sync folder") {
+		t.Fatalf("start: %q, %v", said, err)
+	}
+	if files := scanFolder(t, folder); len(files) != 1 {
+		t.Errorf("the folder has %d entry files, want the vault's 1", len(files))
+	}
+	now, err := settings()
+	if err != nil || now.SyncDir.Value != folder {
+		t.Fatalf("sync.dir %q, %v", now.SyncDir.Value, err)
+	}
+	if _, err := uiStartSync(now, v, filepath.Join(dir, "other")); err == nil || !strings.Contains(err.Error(), "syncs with") {
+		t.Errorf("syncing already: %v", err)
+	}
+	if said, err := leaveSync(now); err != nil || !strings.Contains(said, "no longer syncs") {
+		t.Errorf("leave: %q, %v", said, err)
+	}
+	if now, _ := settings(); now.SyncDir.Value != "" { //nolint:errcheck // checked by the value
+		t.Errorf("after leaving: sync.dir %q", now.SyncDir.Value)
+	}
+}

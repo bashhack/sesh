@@ -379,6 +379,14 @@ type Options struct {
 	// SyncState says the vault's syncing, for the sync row in the
 	// settings: off, or what sesh sync status says. nil: no sync row.
 	SyncState func() (SyncState, error)
+	// StartSync makes the folder at dir (a full path, or from ~/) the
+	// sync folder of the vault v, as sesh sync init does, syncs, and says
+	// what it did; SyncFolderOffer is the folder to offer ("" for none).
+	// LeaveSync stops the vault syncing, as sesh sync leave does. nil:
+	// not offered.
+	StartSync       func(v Vault, dir string) (string, error)
+	SyncFolderOffer func() string
+	LeaveSync       func() (string, error)
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -958,6 +966,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			}
 		}
 		return nil
+	case syncSetMsg:
+		return m.gotSyncSet(msg)
 	case checkedMsg:
 		if msg.didSync {
 			m.syncing = false

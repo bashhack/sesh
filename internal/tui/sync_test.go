@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -320,5 +321,85 @@ func TestSync_LineWholeWhenCut(t *testing.T) {
 	a.press("down")
 	if s := a.screen(); !strings.Contains(s, "keep the folder downloaded") {
 		t.Errorf("a cut line, selected, at 60 wide:\n%s", s)
+	}
+}
+
+// Not syncing, the sync row asks for a folder and starts syncing through
+// it; syncing, the sync panel leaves after asking.
+func TestSync_StartAndLeave(t *testing.T) {
+	on := false
+	var started, left []string
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			if on {
+				return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync"}}, nil
+			}
+			return SyncState{Said: "off"}, nil
+		},
+		StartSync: func(_ Vault, dir string) (string, error) {
+			started = append(started, dir)
+			on = true
+			return "Made the sync folder " + dir + ".", nil
+		},
+		SyncFolderOffer: func() string { return "~/icloud/sesh-sync" },
+		LeaveSync: func() (string, error) {
+			left = append(left, "x")
+			on = false
+			return "This vault no longer syncs with ~/sync.", nil
+		},
+		Sync:    func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing: func() bool { return on },
+	})
+	a.press("ctrl+g", ",", "enter")
+	if a.form == nil || !strings.Contains(a.screen(), "~/icloud/sesh-sync") {
+		t.Fatalf("starting:\n%s", a.screen())
+	}
+	a.press("ctrl+u", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "Type the folder") || len(started) != 0 {
+		t.Fatalf("nothing typed: started %q, form %+v", started, a.form)
+	}
+	a.press("sync", "enter")
+	if a.form == nil || !strings.Contains(a.form.err, "full path") || len(started) != 0 {
+		t.Fatalf("a relative path: started %q, form %+v", started, a.form)
+	}
+	a.press("ctrl+u")
+	a.press("~/sync", "enter")
+	if !slices.Equal(started, []string{"~/sync"}) || !strings.Contains(a.screen(), "Made the sync folder ~/sync.") {
+		t.Fatalf("started %q:\n%s", started, a.screen())
+	}
+	if !strings.Contains(a.screen(), "Sync                      ~/sync") {
+		t.Errorf("the row after starting:\n%s", a.screen())
+	}
+	a.press("enter", "x")
+	if a.ov == nil || a.ov.kind != panelConfirm || !a.ov.danger || len(left) != 0 {
+		t.Fatalf("leave asks first: left %q, panel %+v", left, a.ov)
+	}
+	a.tick(confirmAfter)
+	a.press("y")
+	if len(left) != 1 || !strings.Contains(a.screen(), "no longer syncs") || !strings.Contains(a.screen(), "Sync                      off") {
+		t.Errorf("left %q:\n%s", left, a.screen())
+	}
+}
+
+// Locked before starting to sync could run, the app's own syncs go on
+// after: the start still ends.
+func TestSync_StartLockedFirst(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings:  func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) { return SyncState{Said: "off"}, nil },
+		StartSync: func(Vault, string) (string, error) { return "Made it.", nil },
+		Sync:      func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:   func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter", "ctrl+u", "~/sync")
+	_, start := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !a.syncing {
+		t.Fatal("not syncing while starting")
+	}
+	a.run(a.lock("locked"))
+	a.run(start)
+	if a.syncing {
+		t.Error("still syncing after a start the lock kept from running")
 	}
 }

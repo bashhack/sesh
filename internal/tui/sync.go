@@ -137,6 +137,10 @@ func (m *Model) syncRow(st SyncState) item {
 	}
 	detail := "Not syncing with other computers. sesh sync init <folder> makes a sync folder from this vault; on another computer, sesh sync join <folder>."
 	does := "see how"
+	if m.opts.StartSync != nil {
+		detail = "Not syncing with other computers. Enter asks for a folder a sync tool keeps the same on your computers, and makes it this vault's sync folder, as sesh sync init does; on each other computer, sesh sync join it."
+		does = "start syncing"
+	}
 	if st.On {
 		detail = strings.Join(st.Lines, "\n")
 		does = "see it"
@@ -154,8 +158,11 @@ func (m *Model) syncRow(st SyncState) item {
 // syncing now and the last sync's results.
 func (m *Model) openSync(st SyncState) tea.Cmd {
 	if !st.On {
-		m.say("Not syncing: sesh sync init <folder> makes a sync folder from this vault.")
-		return nil
+		if m.opts.StartSync == nil {
+			m.say("Not syncing: sesh sync init <folder> makes a sync folder from this vault.")
+			return nil
+		}
+		return m.startSync()
 	}
 	ov := &overlay{kind: panelMenu, back: m.ov, title: "Sync"}
 	for _, l := range st.Lines {
@@ -168,7 +175,82 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 	if it := m.resultsItem("r"); it != nil {
 		ov.items = append(ov.items, *it)
 	}
+	if leave := m.opts.LeaveSync; leave != nil {
+		settings := m.ov
+		ov.items = append(ov.items, item{key: "x", label: "leave…", stay: true, run: func() tea.Cmd {
+			m.ov = m.confirm(settings, "Sync", "Stop syncing with "+st.Said+"? This vault's entries stay as they are, and so does the folder for your other computers; sesh sync join joins it again, merging what changed meanwhile.", func() tea.Cmd {
+				m.ov = settings
+				return func() tea.Msg {
+					said, err := leave()
+					return syncSetMsg{said: said, err: err}
+				}
+			})
+			m.ov.danger = true
+			return nil
+		}})
+	}
 	m.ov = ov
+	return nil
+}
+
+// syncSetMsg is syncing started or stopped: what was said, or why not.
+type syncSetMsg struct {
+	err  error
+	said string
+	lost bool // not run: the vault was closed first
+}
+
+// startSync asks for the folder to sync through, then makes it the
+// vault's sync folder and syncs, as sesh sync init does.
+func (m *Model) startSync() tea.Cmd {
+	offer := ""
+	if m.opts.SyncFolderOffer != nil {
+		offer = m.opts.SyncFolderOffer()
+	}
+	start := m.opts.StartSync
+	return m.askOver(true, "Start syncing", "Folder", offer, "A folder a sync tool keeps the same on your computers (iCloud Drive, Dropbox, Syncthing), as a full path or from ~/. It's made the sync folder of this vault; on each other computer, sesh sync join it.", nil, func(dir string) (string, tea.Cmd) {
+		dir = strings.TrimSpace(dir)
+		switch {
+		case dir == "":
+			return "Type the folder to sync through.", nil
+		case !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "/"):
+			return "Type the folder as a full path, or one from ~/.", nil
+		case m.syncing:
+			return "A sync is under way; press Enter again in a moment.", nil
+		}
+		m.say("Making the sync folder…")
+		// No sync of the app's own meanwhile: the first is this one.
+		m.syncing = true
+		read := m.read(func(v Vault, _ func() bool) tea.Msg {
+			said, err := start(v, dir)
+			return syncSetMsg{said: said, err: err}
+		})
+		// A vault closed before it ran (locked) still ends it, so the
+		// app's syncs go on after.
+		return "", func() tea.Msg {
+			if msg := read(); msg != nil {
+				return msg
+			}
+			return syncSetMsg{lost: true}
+		}
+	})
+}
+
+// gotSyncSet says what starting or stopping syncing did, and shows the
+// settings again as they are now.
+func (m *Model) gotSyncSet(msg syncSetMsg) tea.Cmd {
+	m.syncing = false
+	if msg.lost {
+		return nil
+	}
+	if msg.err != nil {
+		m.sayBad(msg.err.Error())
+	} else {
+		m.say(msg.said)
+	}
+	if m.ov != nil && m.ov.kind == panelSettings {
+		return m.refreshSettings()
+	}
 	return nil
 }
 
