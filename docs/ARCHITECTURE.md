@@ -337,7 +337,7 @@ Syncing between computers is three parts, from the bottom up:
   - It returns a `Summary`.
 - **`internal/database`: what the vault keeps.**
   - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself (without its earlier secrets), sealed, with its hash; and whether it was agreed under a key left behind by taking a password change, not checked yet.
-  - `sync_typed`, per entry and push: what this computer's user typed, sealed: hashes of the secret, notes and fields typed and of those they replaced, and the other values typed and replaced as they are. Kept until a master password change taken here makes the entry again with it; a deletion for good or a forget typed here drops what it covers. An in-place restore leaves it as it is; replacing a damaged vault drops it.
+  - `sync_typed`, per entry and push: what this computer's user typed, sealed: the values typed, and of what they replaced the value where it isn't secret, else a hash. A typed secret, notes or field is kept only while the vault itself still has it: triggers mark an entry whose secret, notes, fields or history change or go (`sync_typed_check`), and the next write checks it with the key in hand. Kept until a master password change taken here makes the entry again with it. An in-place restore leaves it, less any sealed with another key; replacing a damaged vault drops it.
   - `sync_info`: this computer's sync ID and change count, the folder's ID, a password change not sent yet, and the folder's recovery key record as last seen.
   - `sync_restored`: entries restored from a backup, not synced since.
   - `history_forgotten`: the forget marks.
