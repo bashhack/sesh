@@ -492,6 +492,7 @@ func TestSetup_KeyFromAnEntry(t *testing.T) {
 	}
 	input := "\n" +
 		"e\npassword/github/alice\n" + // not a TOTP entry
+		"e\npassword/github/\n" + // said as typed
 		"e\ntotp/steam\n" + // codes AWS doesn't use
 		"e\ntotp/aws/default\n" + // the entry being set up
 		"e\n" + imported.String() + "\n" +
@@ -500,7 +501,7 @@ func TestSetup_KeyFromAnEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Setup(): %v\n%s", err, out)
 	}
-	for _, want := range []string{"isn't a TOTP entry's ID", "makes codes AWS doesn't use", "is the entry being set up"} {
+	for _, want := range []string{`"password/github/" isn't a TOTP entry's ID`, "makes codes AWS doesn't use", "is the entry being set up"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

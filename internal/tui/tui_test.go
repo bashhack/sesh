@@ -3793,3 +3793,321 @@ func TestAWSSignInLetsTheVaultGo(t *testing.T) {
 		t.Errorf("locked under the sign-in:\n%s", s)
 	}
 }
+
+// fakeAWSSetup is sesh aws setup as the app's tests have it: profiles of
+// kind, AWS's devices, and what was asked.
+type fakeAWSSetup struct {
+	checkErr, devicesErr error
+	existing             *vault.Entry
+	check                func() // run as Check asks AWS
+	kind                 string
+	keys                 []string // the keys ReadKey or FromEntry gave
+	inHistory            []bool   // what each KeyOnly was told
+	devices              []string
+	codes                int  // codes made
+	noHistory            bool // a key replaced isn't kept
+}
+
+func (s *fakeAWSSetup) Profiles() []string { return []string{"work", "home"} }
+func (s *fakeAWSSetup) Check(profile string) (AWSProfile, error) {
+	if s.check != nil {
+		s.check()
+	}
+	if s.checkErr != nil {
+		return AWSProfile{}, s.checkErr
+	}
+	p := AWSProfile{Profile: profile, Kind: s.kind, Done: "✅ set up " + profile}
+	if s.kind == "" {
+		p.Identity, p.Account = "arn:aws:iam::123456789012:user/alice", "123456789012"
+	}
+	return p, nil
+}
+func (s *fakeAWSSetup) Existing(Vault, string) (*vault.Entry, bool, error) {
+	return s.existing, !s.noHistory, nil
+}
+func (s *fakeAWSSetup) ReadKey(typed []byte) ([]byte, error) {
+	if string(typed) != seed {
+		return nil, errors.New("that TOTP key can't be used")
+	}
+	s.keys = append(s.keys, string(typed))
+	return bytes.Clone(typed), nil
+}
+func (s *fakeAWSSetup) FromEntry(_ Vault, src, _ vault.Key) ([]byte, error) {
+	s.keys = append(s.keys, "from "+src.String())
+	return []byte(seed), nil
+}
+func (s *fakeAWSSetup) Codes([]byte) (string, string, error) {
+	s.codes++
+	return fmt.Sprintf("11111%d", s.codes), fmt.Sprintf("22222%d", s.codes), nil
+}
+func (s *fakeAWSSetup) Devices(string) ([]string, error) { return s.devices, s.devicesErr }
+func (s *fakeAWSSetup) CheckDevice(arn, _ string) error {
+	if !strings.HasPrefix(arn, "arn:aws:iam::123456789012:mfa/") {
+		return errors.New("that isn't an authenticator app's ARN")
+	}
+	return nil
+}
+func (s *fakeAWSSetup) KeyOnly(k vault.Key, inHistory bool, why error) string {
+	s.inHistory = append(s.inHistory, inHistory)
+	return why.Error() + "; the MFA key is saved, as " + k.String()
+}
+
+// focusOn moves the form's focus to the input labelled label.
+func (a *app) focusOn(label string) {
+	a.t.Helper()
+	i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.name() == label })
+	if i < 0 || !a.form.inputs[i].visible() {
+		a.t.Fatalf("no %s input:\n%s", label, a.screen())
+	}
+	a.form.focusInput(i)
+}
+
+// AWS setup in the app, a profile with access keys: the profile checked,
+// the key pasted and saved before AWS is told, the codes (new ones on n),
+// then the device chosen from AWS's, and the setup done.
+func TestAWSSetup(t *testing.T) {
+	f := newFake()
+	s := &fakeAWSSetup{devices: []string{"arn:aws:iam::123456789012:mfa/phone", "arn:aws:iam::123456789012:mfa/sesh"}}
+	a := newApp(t, f, Options{AWSSetup: s})
+	work := vault.AWSKey("work")
+	a.press("ctrl+g", "m")
+	if a.form == nil || a.form.title != "Set up AWS MFA" || !slices.Equal(a.form.inputs[0].offers, []string{"work", "home"}) {
+		t.Fatalf("the profile's form:\n%s", a.screen())
+	}
+	// A profile AWS can't say who signs in as stays in the form.
+	s.checkErr = errors.New("AWS couldn't say who profile work signs in as")
+	a.press("work", "enter")
+	if a.form == nil || !strings.Contains(a.screen(), "AWS couldn't say who profile work signs in as") {
+		t.Fatalf("refused:\n%s", a.screen())
+	}
+	s.checkErr = nil
+	a.press("enter")
+	if a.form == nil || a.form.title != "MFA key for profile work" || !strings.Contains(a.screen(), "Assign MFA device") {
+		t.Fatalf("the key's form:\n%s", a.screen())
+	}
+	// A key that can't be used is said; one that can is saved first.
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press("not-a-key", "ctrl+s")
+	if !strings.Contains(a.screen(), "Not saved: that TOTP key can't be used") || len(f.saves) != 0 {
+		t.Fatalf("a bad key:\n%s", a.screen())
+	}
+	a.press("ctrl+u", seed)
+	a.focusOn("folder")
+	a.press("work/aws", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saves %d:\n%s", len(f.saves), a.screen())
+	}
+	if c := f.saves[0]; c.Key != (vault.Key{}) || c.To != work || string(c.Secret) != seed || c.Folder == nil || *c.Folder != "work/aws" || c.MFADevice != nil {
+		t.Errorf("the key saved: %+v", c)
+	}
+	if sc := a.screen(); !strings.Contains(sc, "MFA code 1:  111111") || !strings.Contains(sc, "MFA code 2:  222221") {
+		t.Fatalf("the codes:\n%s", sc)
+	}
+	a.press("n")
+	if sc := a.screen(); !strings.Contains(sc, "MFA code 1:  111112") {
+		t.Fatalf("new codes:\n%s", sc)
+	}
+	a.press("enter")
+	if sc := a.screen(); !strings.Contains(sc, "mfa/phone") || !strings.Contains(sc, "mfa/sesh") {
+		t.Fatalf("the devices:\n%s", sc)
+	}
+	a.press("2")
+	if c := f.saves[len(f.saves)-1]; c.Key != work || c.MFADevice == nil || *c.MFADevice != "arn:aws:iam::123456789012:mfa/sesh" || c.Secret != nil {
+		t.Errorf("the device saved: %+v", c)
+	}
+	if sc := a.screen(); !strings.Contains(sc, "✅ set up work") || a.awsSet != nil {
+		t.Errorf("done:\n%s", sc)
+	}
+}
+
+// No device listed: looking again, or typing its ARN, checked; Esc over
+// the codes says the key's kept; a lock wipes the key held.
+func TestAWSSetupDevicesAndLeaving(t *testing.T) {
+	f := newFake()
+	s := &fakeAWSSetup{}
+	a := newApp(t, f, Options{AWSSetup: s})
+	start := func(profile string) {
+		t.Helper()
+		a.press("ctrl+g", "m", profile, "enter")
+		a.focusOn("MFA key, or otpauth:// link")
+		a.press(seed, "ctrl+s")
+		if a.awsSet == nil || string(a.awsSet.key) != seed {
+			t.Fatalf("not at the codes:\n%s", a.screen())
+		}
+	}
+	start("work")
+	a.press("enter")
+	if sc := a.screen(); !strings.Contains(sc, "AWS lists no authenticator app") {
+		t.Fatalf("no devices:\n%s", sc)
+	}
+	s.devices = []string{"arn:aws:iam::123456789012:mfa/sesh"}
+	a.press("r")
+	if sc := a.screen(); !strings.Contains(sc, "mfa/sesh") {
+		t.Fatalf("looked again:\n%s", sc)
+	}
+	a.press("m", "arn:aws:iam::999999999999:mfa/x", "enter")
+	if sc := a.screen(); a.form == nil || !strings.Contains(sc, "isn't an authenticator app's ARN") {
+		t.Fatalf("a bad ARN:\n%s", sc)
+	}
+	a.press("ctrl+u", "arn:aws:iam::123456789012:mfa/typed", "enter")
+	if c := f.saves[len(f.saves)-1]; c.MFADevice == nil || *c.MFADevice != "arn:aws:iam::123456789012:mfa/typed" {
+		t.Errorf("the ARN typed: %+v", c)
+	}
+	// Leaving over the codes: the key is saved, and said so.
+	a.press("enter") // the done notice
+	start("home")
+	key := a.awsSet.key
+	a.press("esc")
+	if sc := a.screen(); a.awsSet != nil || !strings.Contains(sc, "Left before AWS had the device") || string(key) != strings.Repeat("\x00", len(seed)) {
+		t.Errorf("left over the codes, key %q:\n%s", key, sc)
+	}
+	// A lock over the codes wipes the key.
+	a.press("enter")
+	start("other")
+	key = a.awsSet.key
+	a.lock("locked")
+	if a.awsSet != nil || string(key) != strings.Repeat("\x00", len(seed)) {
+		t.Errorf("locked over the codes: key %q", key)
+	}
+}
+
+// An entry sesh has already is replaced after a yes, its device taken out
+// for the new key; a profile signing in with aws login, its key from a
+// TOTP entry, needs no codes nor device.
+func TestAWSSetupReplaceAndFromEntry(t *testing.T) {
+	f := newFake()
+	work := vault.AWSKey("work")
+	s := &fakeAWSSetup{kind: "aws login", existing: &vault.Entry{Key: work, Folder: "aws"}}
+	a := newApp(t, f, Options{AWSSetup: s})
+	a.press("ctrl+g", "m", "work", "enter")
+	if sc := a.screen(); !strings.Contains(sc, "sesh already has an MFA key for profile work") {
+		t.Fatalf("not asked:\n%s", sc)
+	}
+	a.press("wait", "y")
+	a.focusOn("the key")
+	a.press("→") // a TOTP entry
+	a.focusOn("TOTP entry")
+	a.press("totp/github/alice", "ctrl+s")
+	if len(s.keys) != 1 || s.keys[0] != "from totp/github/alice" {
+		t.Fatalf("the key read: %q\n%s", s.keys, a.screen())
+	}
+	if c := f.saves[0]; c.Key != work || c.To != work || c.MFADevice == nil || *c.MFADevice != "" || c.Folder != nil {
+		t.Errorf("replaced: %+v", c)
+	}
+	if sc := a.screen(); s.codes != 0 || !strings.Contains(sc, "✅ set up work") {
+		t.Errorf("from an entry, for aws login: codes %d\n%s", s.codes, sc)
+	}
+}
+
+// Another command changing the vault mid-setup leaves each step working;
+// a lock once the key's saved says what's kept; AWS is asked with the
+// vault let go; with history.keep 0, replacing a key says it's lost.
+func TestAWSSetupAcrossChangesAndLocks(t *testing.T) {
+	f := newFake()
+	s := &fakeAWSSetup{devices: []string{"arn:aws:iam::123456789012:mfa/sesh"}}
+	a := newApp(t, f, Options{AWSSetup: s})
+	changed := func(what string) {
+		t.Helper()
+		f.changed = true
+		a.tick(time.Second)
+		if a.awsSet == nil {
+			t.Fatalf("%s: the vault changing ended the setup:\n%s", what, a.screen())
+		}
+	}
+	a.press("ctrl+g", "m", "work", "enter")
+	changed("the key's form")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s")
+	if sc := a.screen(); len(f.saves) != 1 || !strings.Contains(sc, "MFA code 1:") {
+		t.Fatalf("saving after a change:\n%s", sc)
+	}
+	changed("the codes")
+	if sc := a.screen(); !strings.Contains(sc, "MFA code 1:") {
+		t.Fatalf("the codes closed on a change:\n%s", sc)
+	}
+	a.press("enter")
+	changed("the devices")
+	if sc := a.screen(); !strings.Contains(sc, "mfa/sesh") {
+		t.Fatalf("the devices closed on a change:\n%s", sc)
+	}
+	a.press("m")
+	changed("the ARN's form")
+	a.press("arn:aws:iam::123456789012:mfa/typed", "enter")
+	if sc := a.screen(); !strings.Contains(sc, "✅ set up work") {
+		t.Fatalf("the device saved after a change:\n%s", sc)
+	}
+	// Esc while the device saves: how it went is still said.
+	a.press("enter")
+	a.press("ctrl+g", "m", "esc-test", "enter")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s", "enter")
+	st := a.awsSet
+	cmd := a.awsSaveDevice(st, "arn:aws:iam::123456789012:mfa/sesh")
+	a.press("esc")
+	a.run(cmd)
+	if sc := a.screen(); !strings.Contains(sc, "✅ set up esc-test") {
+		t.Fatalf("Esc while the device saved:\n%s", sc)
+	}
+	a.press("enter")
+	// A lock between the key's save and its reply says it's kept.
+	e := newApp(t, f, Options{AWSSetup: s})
+	e.press("ctrl+g", "m", "mid-save", "enter")
+	e.focusOn("MFA key, or otpauth:// link")
+	e.press(seed)
+	_, next := e.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	_, save := e.Update(next()) // the key read; its save runs, its reply held
+	saved := save()
+	e.lock("sesh locked: idle")
+	e.Update(saved)
+	if !strings.Contains(e.lockedWhy, "the MFA key is saved, as totp/aws/mid-save") {
+		t.Errorf("locked mid-save: %q", e.lockedWhy)
+	}
+
+	// A lock over the codes says the key's saved.
+	a.press("enter")
+	a.press("ctrl+g", "m", "home", "enter")
+	a.focusOn("MFA key, or otpauth:// link")
+	a.press(seed, "ctrl+s")
+	a.lock("sesh locked: idle")
+	if !strings.Contains(a.lockedWhy, "the MFA key is saved, as totp/aws/home") || s.inHistory[len(s.inHistory)-1] {
+		t.Errorf("locked once the key's saved: %q, in history %v", a.lockedWhy, s.inHistory)
+	}
+
+	// AWS is asked with the vault let go: closing it doesn't wait.
+	b := newApp(t, f, Options{AWSSetup: s})
+	started, release := make(chan struct{}), make(chan struct{})
+	s.check = func() { close(started); <-release }
+	b.press("ctrl+g", "m", "work")
+	cmd = b.form.submit()
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+	<-started
+	g, closed := b.v, make(chan struct{})
+	go func() { g.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the vault waited for AWS")
+	}
+	close(release)
+	<-got
+	s.check = nil
+
+	// history.keep 0: replacing a key says the one there is lost; the key
+	// saved, a lock says it isn't in the history.
+	s.existing, s.noHistory = &vault.Entry{Key: vault.AWSKey("work")}, true
+	c := newApp(t, f, Options{AWSSetup: s})
+	c.press("ctrl+g", "m", "work", "enter")
+	if sc := c.screen(); !strings.Contains(sc, "history.keep is 0") || c.ov == nil || !c.ov.danger {
+		t.Fatalf("history.keep 0:\n%s", sc)
+	}
+	s.noHistory = false
+	d := newApp(t, f, Options{AWSSetup: s})
+	d.press("ctrl+g", "m", "work", "enter", "wait", "y")
+	d.focusOn("MFA key, or otpauth:// link")
+	d.press(seed, "ctrl+s")
+	d.lock("sesh locked: idle")
+	if !s.inHistory[len(s.inHistory)-1] {
+		t.Errorf("a replaced key kept in the history: told %v", s.inHistory)
+	}
+}

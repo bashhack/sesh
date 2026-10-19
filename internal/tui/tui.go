@@ -405,6 +405,8 @@ type Options struct {
 	// vault, before it starts, lets sesh lock (ui.lock_on_quit). nil: not
 	// offered.
 	AWSSignIn func(v Vault, k vault.Key) (signIn func() (shell func(release func()) error, err error), err error)
+	// AWSSetup is sesh aws setup, for the app's; nil: not offered.
+	AWSSetup AWSSetup
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -464,6 +466,8 @@ type Model struct {
 	// afterword is said once the app has ended, and then done.
 	afterword string
 	then      func(release func()) error
+	// awsSet is the AWS MFA setup under way, nil when none.
+	awsSet *awsSetting
 	// importing is the import being previewed; importAsk shows its form's
 	// password input, when the export asks for one, and importName says
 	// where it's from.
@@ -633,6 +637,7 @@ func (m *Model) Close() {
 		m.v.close()
 		m.v = nil
 	}
+	m.endAWSSetup()
 	for _, g := range m.shut {
 		g.close()
 	}
@@ -991,6 +996,21 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotSyncSet(msg)
 	case awsSignedInMsg:
 		return m.awsSignedIn(&msg)
+	case awsProfilesMsg:
+		if msg.epoch == m.epoch && m.form != nil && slices.Contains(m.form.inputs, msg.in) {
+			msg.in.offers = msg.names
+		}
+		return nil
+	case awsCheckedMsg:
+		return m.awsChecked(&msg)
+	case awsKeyMsg:
+		return m.awsKeyRead(&msg)
+	case awsKeySavedMsg:
+		return m.awsKeySaved(&msg)
+	case awsDevicesMsg:
+		return m.awsDevices(&msg)
+	case awsDeviceSavedMsg:
+		return m.awsDeviceSaved(&msg)
 	case syncPanelMsg:
 		if isSyncPanel(m.ov) {
 			m.syncPanel = msg.st
@@ -1033,7 +1053,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 				// stays, to say what it did.
 				return m.reread()
 			}
-			if m.ov != nil {
+			// The AWS setup's panels are about what's typed and AWS,
+			// not the entries: they stay.
+			if m.ov != nil && (m.ov.aws == nil || m.ov.aws != m.awsSet) {
 				m.ov = nil
 				if msg.didSync {
 					m.sayBad("A sync took changes from another computer; open the actions again.")
@@ -1158,6 +1180,11 @@ func lockedReason(err error) string {
 // the vault is closed once the reads still running end.
 func (m *Model) lock(why string) tea.Cmd {
 	m.lastSaid, m.lastSaidAt = nil, time.Time{}
+	// An AWS setup that saved its key says what's kept, and what to do.
+	if st := m.awsSet; st != nil && st.saved {
+		why += " " + m.awsLeft(st, "Locked before the setup was done").question
+	}
+	m.endAWSSetup()
 	var closing tea.Cmd
 	if m.v != nil {
 		closing = m.v.shut()
