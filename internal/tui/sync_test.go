@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // syncApp is an app whose vault syncs: each sync's reason goes in hows,
@@ -295,5 +297,28 @@ func TestSync_ResultsWhole(t *testing.T) {
 	a.press("esc", "esc", "esc", "ctrl+g", "l")
 	if a.v != nil || a.lastSaid != nil {
 		t.Errorf("after locking: unlocked %v, results kept %q", a.v != nil, a.lastSaid)
+	}
+}
+
+// A line the row cuts is said whole below it, however narrow the window;
+// one it doesn't cut isn't said again.
+func TestSync_LineWholeWhenCut(t *testing.T) {
+	long := "⚠️  1 entry waits for the sync tool to fetch its file: keep the folder downloaded"
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", long}}, nil
+		},
+		Sync:    func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing: func() bool { return true },
+	})
+	a.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	a.press("ctrl+g", ",", "enter")
+	if s := a.screen(); strings.Count(s, "Sync folder:   ~/sync") != 1 {
+		t.Errorf("a short line, selected:\n%s", s)
+	}
+	a.press("down")
+	if s := a.screen(); !strings.Contains(s, "keep the folder downloaded") {
+		t.Errorf("a cut line, selected, at 60 wide:\n%s", s)
 	}
 }

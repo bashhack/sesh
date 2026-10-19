@@ -927,8 +927,12 @@ func uiSyncState(cfg *config.Config) (tui.SyncState, error) {
 	st := tui.SyncState{Said: tildePath(cfg.SyncDir.Value), On: true}
 	// A folder that doesn't answer (a stuck network mount) isn't waited
 	// on, as the app's own syncs aren't.
-	if answered, _ := answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
-		st.Lines = []string{"Sync folder:   " + tildePath(cfg.SyncDir.Value), fmt.Sprintf("⚠️  The sync folder %s %s %s: nothing could be read of it.", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}
+	if answered, waited := statusProbing.answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
+		why := fmt.Sprintf("%s %s", notAnswering, autoSyncBudget)
+		if !waited {
+			why = "still hasn't answered"
+		}
+		st.Lines = []string{"Sync folder:   " + tildePath(cfg.SyncDir.Value), fmt.Sprintf("⚠️  The sync folder %s %s: nothing could be read of it.", tildePath(cfg.SyncDir.Value), why)}
 		return st, nil
 	}
 	lines, err := syncStatusLines(cfg)

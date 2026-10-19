@@ -179,12 +179,8 @@ func (m *Model) lineItem(l string) item {
 	if strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌") {
 		label = lipgloss.NewStyle().Foreground(m.th.warn).Render(l)
 	}
-	it := item{label: label, stay: true, run: func() tea.Cmd { return nil }}
 	// Whole below only when the row cuts it.
-	if lipgloss.Width(l) > 48 {
-		it.detail = l
-	}
-	return it
+	return item{label: label, detail: l, cut: true, stay: true, run: func() tea.Cmd { return nil }}
 }
 
 // resultsItem opens what the last sync that said something said; nil

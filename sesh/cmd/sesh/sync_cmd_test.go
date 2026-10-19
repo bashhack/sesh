@@ -840,3 +840,28 @@ func TestUISyncStateTrouble(t *testing.T) {
 		t.Errorf("the folder stuck: %+v, %v", st, err)
 	}
 }
+
+// The sync row's look at the folder isn't taken for a sync's still
+// waiting: each keeps its own.
+func TestUISyncStateBesideASync(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	folder := filepath.Join(dir, "sync")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probing.Lock()
+	probing.dirs[folder] = true
+	probing.Unlock()
+	t.Cleanup(func() { probing.Lock(); delete(probing.dirs, folder); probing.Unlock() })
+	st, err := uiSyncState(cfg)
+	if err != nil || slices.ContainsFunc(st.Lines, func(l string) bool { return strings.Contains(l, "answer") }) {
+		t.Errorf("with a sync's look waiting: %+v, %v; want the folder read", st, err)
+	}
+}

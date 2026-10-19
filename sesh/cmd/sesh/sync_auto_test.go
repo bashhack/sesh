@@ -359,8 +359,9 @@ func TestUISync_WarnsOnce(t *testing.T) {
 	if said, _, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "nothing syncs until") || ran {
 		t.Fatalf("the first push: %q, ran %v", said, ran)
 	}
-	if said, _, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 {
-		t.Errorf("the next push: %q", said)
+	// Said once a day in the status line; every time in the results.
+	if said, all, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 || len(all) != 1 || !strings.Contains(all[0], "nothing syncs until") {
+		t.Errorf("the next push: said %q, all %q", said, all)
 	}
 	if said, _, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 {
 		t.Errorf("sync now: %q", said)
