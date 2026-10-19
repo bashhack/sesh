@@ -415,3 +415,43 @@ func TestWriteMendsDamagedTimes(t *testing.T) {
 		}
 	}
 }
+
+// GetChecked lets check see the entry before anything's decrypted: refused,
+// nothing is read or recorded; let go on, the secret is the row's, and the
+// read is recorded as reading says.
+func TestGetChecked(t *testing.T) {
+	_, s := rekeyVault(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.SetDetails(k, &vault.Details{URL: "https://bank.example"}); err != nil {
+		t.Fatal(err)
+	}
+	reads := func() int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'access' AND entry_id = ?`, k.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := reads()
+	refuse := errors.New("not this site")
+	if _, secret, err := s.GetChecked(k, "secret, to fill it in", func(e *vault.Entry) error {
+		if e.URL != "https://bank.example" {
+			t.Errorf("check saw URL %q", e.URL)
+		}
+		return refuse
+	}); !errors.Is(err, refuse) || secret != nil || reads() != before {
+		t.Errorf("refused: %q, %v; reads %d, was %d", secret, err, reads(), before)
+	}
+	e, secret, err := s.GetChecked(k, "secret, to fill it in", func(*vault.Entry) error { return nil })
+	if err != nil || string(secret) != "bank-secret" || e.URL != "https://bank.example" || reads() != before+1 {
+		t.Errorf("let go on: %+v %q, %v; reads %d", e, secret, err, reads())
+	}
+	var detail string
+	if err := s.db.QueryRow(`SELECT detail FROM audit_log WHERE event_type = 'access' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil || detail != "Read: secret, to fill it in" {
+		t.Errorf("recorded %q, %v", detail, err)
+	}
+	if _, _, err := s.GetChecked(vault.Key{Kind: vault.KindPassword, Service: "gone"}, "x", func(*vault.Entry) error { return nil }); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("missing: %v", err)
+	}
+}

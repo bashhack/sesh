@@ -92,6 +92,46 @@ func (s *Store) GetFor(k vault.Key, reading string) ([]byte, error) {
 	return s.get(k, "Read: "+reading)
 }
 
+// GetChecked is GetFor, the entry and its secret read from one row at
+// once: check sees the entry (its URL, details and settings) first, and
+// only when it lets the read go on is the secret decrypted and the read
+// recorded, so a refused read reads nothing, and the secret given is the
+// row's that was checked, whatever renames or edits come meanwhile.
+func (s *Store) GetChecked(k vault.Key, reading string, check func(e *vault.Entry) error) (vault.Entry, []byte, error) {
+	var col, tags sql.NullString
+	var url, details string
+	var encData, salt []byte
+	e := vault.Entry{Key: k}
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at, encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt, &encData, &salt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return vault.Entry{}, nil, notFound(k)
+	}
+	if err != nil {
+		return vault.Entry{}, nil, fmt.Errorf("read %s: %w", k, err)
+	}
+	if e.Settings, err = decodeSettings(k, col); err != nil {
+		return vault.Entry{}, nil, err
+	}
+	e.Size = plainSize(int64(len(encData)))
+	e.Tags = splitTags(tags)
+	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+		return vault.Entry{}, nil, err
+	}
+	if err := check(&e); err != nil {
+		return vault.Entry{}, nil, err
+	}
+	secret, err := s.oracle.DecryptEntry(encData, salt, entryAAD(k))
+	if err != nil {
+		if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+			err = kerr
+		}
+		return vault.Entry{}, nil, fmt.Errorf("decrypt %s: %w", k, err)
+	}
+	s.audit("access", k.String(), "Read: "+reading)
+	return e, secret, nil
+}
+
 // CodeKey is the TOTP entry k's key, for drawing its codes on screen,
 // which the audit log doesn't record, as it does reading a secret: a code
 // shown isn't one copied or revealed. Only a TOTP entry's key is read so.
