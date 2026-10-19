@@ -196,3 +196,49 @@ func TestSync_OneAtATime(t *testing.T) {
 		t.Errorf("synced %v, want one at a time", hows)
 	}
 }
+
+// The settings panel has a sync row: off, or the folder and when the app
+// last synced; Enter shows what sesh sync status says, with syncing now.
+func TestSync_Row(t *testing.T) {
+	state := SyncState{Said: "off"}
+	a := newApp(t, newFake(), Options{
+		Settings:  func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) { return state, nil },
+		Sync:      func(Vault, SyncHow) ([]string, bool) { return nil, true },
+		Syncing:   func() bool { return state.On },
+	})
+	a.press("ctrl+g", ",")
+	if s := a.screen(); !strings.Contains(s, "Sync                      off") || !strings.Contains(s, "sesh sync init <folder>") {
+		t.Fatalf("not syncing:\n%s", s)
+	}
+	a.press("esc", "esc")
+	state = SyncState{Said: "~/sync", On: true, Lines: []string{"Sync folder:   ~/sync", "Changed here, to send:          2", "⚠️  1 entry's file is sealed with another master password's key: sync leaves it for the computer that wrote it"}}
+	a.tick(time.Second)
+	a.press("ctrl+g", ",")
+	if s := a.screen(); !strings.Contains(s, "Sync                      ~/sync, synced ") {
+		t.Fatalf("syncing:\n%s", s)
+	}
+	a.press("enter")
+	if s := a.screen(); a.ov == nil || a.ov.title != "Sync" || !strings.Contains(s, "Changed here, to send:          2") || !strings.Contains(s, "1 entry's file is sealed") || !strings.Contains(s, "sync now") {
+		t.Errorf("the sync panel:\n%s", s)
+	}
+}
+
+// Every line the last sync that said something said is kept for its
+// panel, from the sync panel and Ctrl-G's menu; a quiet sync after keeps
+// them.
+func TestSync_Results(t *testing.T) {
+	a, _, said := syncApp(t, newFake())
+	*said = []string{"Synced: 2 taken, 1 sent.", "⚠️  Sync: 1 entry (password/bank/alice) made here, whose secret this vault no longer has as typed here: not sent until it's typed again here."}
+	a.tick(time.Second)
+	*said = nil
+	a.tick(syncEvery)
+	a.press("ctrl+g")
+	if !strings.Contains(a.screen(), "last sync's results (") {
+		t.Fatalf("Ctrl-G's menu:\n%s", a.screen())
+	}
+	a.press("y")
+	if s := a.screen(); a.ov == nil || !strings.HasPrefix(a.ov.title, "Last sync's results, ") || !strings.Contains(s, "Synced: 2 taken, 1 sent.") || !strings.Contains(s, "password/bank/alice") {
+		t.Errorf("the results:\n%s", s)
+	}
+}

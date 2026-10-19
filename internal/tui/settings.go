@@ -42,8 +42,9 @@ type Live struct {
 // settingsMsg is the settings, read for the panel.
 type settingsMsg struct {
 	err      error
-	recovery *Recovery // nil when it isn't shown
-	touchID  *TouchID  // nil when it isn't shown
+	recovery *Recovery  // nil when it isn't shown
+	touchID  *TouchID   // nil when it isn't shown
+	sync     *SyncState // nil when it isn't shown
 	settings []Setting
 }
 
@@ -58,7 +59,7 @@ func (m *Model) openSettings() tea.Cmd {
 }
 
 // showSettings lists the settings in the open panel.
-func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *TouchID) {
+func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *TouchID, sync *SyncState) {
 	ov := m.ov
 	sel := ov.sel
 	ov.items = nil
@@ -75,6 +76,9 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 	}
 	if touch != nil {
 		ov.items = append(ov.items, m.touchIDRow(*touch))
+	}
+	if sync != nil {
+		ov.items = append(ov.items, m.syncRow(*sync))
 	}
 	ov.items = append(ov.items, item{
 		label:  fmt.Sprintf("%-25s %s", "Checks (sesh doctor)", "run…"),
@@ -216,7 +220,7 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 
 // refreshSettings reads the settings again into the open panel.
 func (m *Model) refreshSettings() tea.Cmd {
-	read, recovery, touch := m.opts.Settings, m.opts.Recovery, m.opts.TouchIDState
+	read, recovery, touch, syncState := m.opts.Settings, m.opts.Recovery, m.opts.TouchIDState, m.opts.SyncState
 	return func() tea.Msg {
 		var msg settingsMsg
 		msg.settings, msg.err = read()
@@ -227,6 +231,10 @@ func (m *Model) refreshSettings() tea.Cmd {
 		if touch != nil && msg.err == nil {
 			t, err := touch()
 			msg.touchID, msg.err = &t, err
+		}
+		if syncState != nil && msg.err == nil {
+			s, err := syncState()
+			msg.sync, msg.err = &s, err
 		}
 		return msg
 	}
@@ -244,7 +252,7 @@ func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
 	}
 	top := m.ov
 	m.ov = panel
-	cmd := m.loaded(msg.err, func() { m.showSettings(msg.settings, msg.recovery, msg.touchID) })
+	cmd := m.loaded(msg.err, func() { m.showSettings(msg.settings, msg.recovery, msg.touchID, msg.sync) })
 	if m.ov == panel {
 		m.ov = top
 	}

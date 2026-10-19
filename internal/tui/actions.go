@@ -173,6 +173,9 @@ func (m *Model) seshItems() []item {
 	if s := m.syncItem(); s != nil {
 		items = append(items, *s)
 	}
+	if r := m.resultsItem("y"); r != nil {
+		items = append(items, *r)
+	}
 	return items
 }
 

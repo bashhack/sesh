@@ -375,6 +375,9 @@ type Options struct {
 	Sync     func(v Vault, how SyncHow) (said []string, ran bool)
 	Syncing  func() bool
 	AutoSync func() bool
+	// SyncState says the vault's syncing, for the sync row in the
+	// settings: off, or what sesh sync status says. nil: no sync row.
+	SyncState func() (SyncState, error)
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -420,9 +423,13 @@ type Model struct {
 	// and looked for its own to send; lastSynced, when a sync last
 	// finished (syncing says one is under way).
 	lastPull, lastPush, lastSynced time.Time
-	statusUntil                    time.Time
-	lastKeepAlive                  time.Time
-	clipUntil                      time.Time // when the clipboard clears what was copied
+	// lastSaid is what the last sync that said something said, line by
+	// line, and lastSaidAt when; for the sync results panel.
+	lastSaid      []string
+	lastSaidAt    time.Time
+	statusUntil   time.Time
+	lastKeepAlive time.Time
+	clipUntil     time.Time // when the clipboard clears what was copied
 
 	quitErr error
 	// afterword is said once the app has ended.
@@ -963,6 +970,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		if msg.didSync {
 			m.saySynced(msg.synced)
+			if len(msg.synced) > 0 {
+				m.lastSaid, m.lastSaidAt = msg.synced, m.opts.Now()
+			}
 		}
 		if msg.changed {
 			// Entries may have changed, keys with them: read again. A

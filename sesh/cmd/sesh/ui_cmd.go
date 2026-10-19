@@ -237,6 +237,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, bool) { return uiSync(settingsNow(cfg), v, how) },
 		Syncing:      func() bool { return settingsNow(cfg).SyncDir.Value != "" },
 		AutoSync:     func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
+		SyncState:    func() (tui.SyncState, error) { return uiSyncState(settingsNow(cfg)) },
 		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
 		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
@@ -915,6 +916,16 @@ func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ra
 		lines = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
 	}
 	return lines, ran
+}
+
+// uiSyncState is the vault's syncing, for the app's sync row: off, or
+// what sesh sync status says.
+func uiSyncState(cfg *config.Config) (tui.SyncState, error) {
+	if cfg.SyncDir.Value == "" {
+		return tui.SyncState{Said: "off"}, nil
+	}
+	lines, err := syncStatusLines(cfg)
+	return tui.SyncState{Said: tildePath(cfg.SyncDir.Value), Lines: lines, On: true}, err
 }
 
 // stuck is until when the app's syncs on their own wait for a folder that

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -771,5 +772,32 @@ func TestSync_LostInfoChangedOrBehind(t *testing.T) {
 	}
 	if got := getEntry(t, "password/a"); got != "2" {
 		t.Errorf("third has a = %q", got)
+	}
+}
+
+// The app's sync row says what sesh sync status says, and off when the
+// vault doesn't sync.
+func TestUISyncState(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := uiSyncState(cfg); err != nil || st.On || st.Said != "off" {
+		t.Fatalf("not syncing: %+v, %v", st, err)
+	}
+	if _, err := runSyncOut(t, "", false, "init", filepath.Join(dir, "sync")); err != nil {
+		t.Fatal(err)
+	}
+	putEntry(t, "password/b", "2")
+	if cfg, err = settings(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := uiSyncState(cfg)
+	if err != nil || !st.On || !strings.HasSuffix(st.Said, "sync") || !slices.Contains(st.Lines, "Changed here, to send:          1") {
+		t.Errorf("syncing: %+v, %v", st, err)
 	}
 }
