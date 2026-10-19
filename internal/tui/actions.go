@@ -34,6 +34,7 @@ const (
 	panelAudit                     // the audit log
 	panelFiling                    // the folders and tags, as the sidebar lists them
 	panelQR                        // a TOTP key as a QR code, for a phone
+	panelAWSCodes                  // the codes AWS asks for, setting up AWS MFA
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -172,10 +173,15 @@ func (m *Model) seshItems() []item {
 		{key: "t", label: "the trash…", run: m.openTrash},
 		{key: "b", label: "backups…", run: m.openBackups},
 		{key: "i", label: "import and export…", run: m.openTransfer},
+	}
+	if m.opts.AWSSetup != nil {
+		items = append(items, item{key: "m", label: "set up AWS MFA…", run: m.openAWSSetup})
+	}
+	items = append(items, []item{
 		{key: "r", label: "health report…", run: m.openHealth},
 		{key: ",", label: "settings and safety…", run: m.openSettings},
 		{key: "l", label: "lock sesh", run: m.lockNow},
-	}
+	}...)
 	if s := m.syncItem(); s != nil {
 		items = append(items, *s)
 	}
@@ -200,6 +206,9 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return tea.Quit
 	case "esc":
+		if ov.kind == panelAWSCodes {
+			return m.awsCodesKey(k)
+		}
 		if ov.kind == panelImport {
 			if m.importing != nil && m.importing.applying {
 				// The import under way carries on to the end.
@@ -215,6 +224,9 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.width < minWidth || m.height < minHeight {
 		// The panel isn't on screen: nothing is done unseen.
 		return nil
+	}
+	if ov.kind == panelAWSCodes {
+		return m.awsCodesKey(k)
 	}
 	if ov.kind == panelNotice {
 		// While it waits, only Esc leaves it.
@@ -868,7 +880,7 @@ func (m *Model) drawOverlay(base string) string {
 		itemRoom = room - len(said) - 1
 	}
 	switch {
-	case ov.kind == panelConfirm || ov.kind == panelNotice:
+	case ov.kind == panelConfirm || ov.kind == panelNotice || ov.kind == panelAWSCodes:
 		// Its end is cut to fit, keeping the keys that answer it on screen.
 		said := strings.Split(th.style().Width(w-6).Render(ov.question), "\n")
 		if len(said) > room {
@@ -999,6 +1011,8 @@ func (m *Model) drawOverlay(base string) string {
 		if ov.danger {
 			edge, titleStyle = th.bad, lipgloss.NewStyle().Foreground(th.bad).Bold(true)
 		}
+	case panelAWSCodes:
+		hint = th.hints([2]string{"↵", "AWS has it"}, [2]string{"n", "new codes"}, [2]string{"esc", "leave"})
 	case panelNotice:
 		hint = th.hints([2]string{"↵", "ok"})
 		if ov.loading {

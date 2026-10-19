@@ -269,6 +269,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return uiTakeKeyChange(settingsNow(cfg), current, next)
 		},
 		KeyChangeNote: func(v tui.Vault) string { return uiKeyChangeNote(settingsNow(cfg), v) },
+		AWSSetup:      uiAWSSetup{},
 		AWSSignIn: func(v tui.Vault, k vault.Key) (func() (func(func()) error, error), error) {
 			return uiAWSSignIn(app, v, k)
 		},

@@ -168,7 +168,13 @@ func Preflight() error {
 	if !stdinIsTerminal() {
 		return errors.New("sesh aws setup asks questions and reads the MFA key at a terminal: run it in one")
 	}
-	if err := awsInstalled(); err != nil {
+	return AWSInstalled()
+}
+
+// AWSInstalled says, as an error, that the AWS CLI isn't installed, which
+// setup and sesh aws use.
+func AWSInstalled() error {
+	if awsInstalled() != nil {
 		return errors.New("the AWS CLI isn't installed, and sesh aws uses it: https://aws.amazon.com/cli/")
 	}
 	return nil
@@ -246,11 +252,8 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	// login, SSO, a role) only needs the code, when its sign-in asks.
 	var identity string
 	if kind == "" {
-		if identity, err = callerIdentity(profile); err != nil {
-			return fmt.Errorf("AWS couldn't say who %s signs in as, so sesh can't set it up: %w\nCheck the profile works with: aws sts get-caller-identity%s", profileName(profile), err, profileFlag(profile))
-		}
-		if strings.Contains(identity, ":assumed-role/") || strings.Contains(identity, ":federated-user/") {
-			return fmt.Errorf("%s signs in as %s, a temporary session (such as SSO or a role); sesh aws needs a profile with an IAM user's own access keys, which AWS gives MFA sessions to", profileName(profile), identity)
+		if identity, err = CheckIdentity(profile); err != nil {
+			return err
 		}
 		fmt.Printf("✅ %s signs in as %s\n", capitalized(profileName(profile)), identity)
 	} else {
@@ -313,10 +316,31 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	return nil
 }
 
+// CheckIdentity is who profile, one with an IAM user's access keys, signs
+// in as, AWS asked; an error says why it can't be set up: AWS can't say,
+// or it's a temporary session, which AWS gives no MFA session to.
+func CheckIdentity(profile string) (string, error) {
+	identity, err := callerIdentity(profile)
+	if err != nil {
+		return "", fmt.Errorf("AWS couldn't say who %s signs in as, so sesh can't set it up: %w\nCheck the profile works with: aws sts get-caller-identity%s", profileName(profile), err, profileFlag(profile))
+	}
+	if strings.Contains(identity, ":assumed-role/") || strings.Contains(identity, ":federated-user/") {
+		return "", fmt.Errorf("%s signs in as %s, a temporary session (such as SSO or a role); sesh aws needs a profile with an IAM user's own access keys, which AWS gives MFA sessions to", profileName(profile), identity)
+	}
+	return identity, nil
+}
+
 // keyOnly is err from a setup that saved the key but not its device:
 // what's kept, and what to do. inHistory says the key replaced is in the
 // entry's history.
 func (h *AWSSetupHandler) keyOnly(k vault.Key, inHistory bool, err error) error {
+	return KeyOnly(k, inHistory, err)
+}
+
+// KeyOnly is err from a setup that saved the key, at k, but not its
+// device: what's kept, and what to do. inHistory says the key replaced is
+// in the entry's history.
+func KeyOnly(k vault.Key, inHistory bool, err error) error {
 	msg := fmt.Sprintf("%v\nThe MFA key is saved, as %s, but not which MFA device it's for: sesh aws asks AWS for it when the user has one authenticator app; otherwise run sesh aws setup again to choose it.", err, k)
 	if inHistory {
 		msg += fmt.Sprintf("\nIf AWS didn't finish adding the device, the key this one replaced is in the entry's history: sesh history %s", shell.Quote(k.String()))
@@ -449,25 +473,38 @@ func (h *AWSSetupHandler) entrySource(k vault.Key) (vault.Key, error) {
 		return vault.Key{}, err
 	}
 	src, err := vault.ParseKey(id)
-	switch {
-	case err != nil || src.Kind != vault.KindTOTP:
-		return vault.Key{}, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
-	case src == k:
-		return vault.Key{}, fmt.Errorf("%s is the entry being set up", k)
-	}
-	e, err := h.store.Lookup(src)
 	if err != nil {
-		return vault.Key{}, fmt.Errorf("%s: %w", src, err)
+		return vault.Key{}, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
 	}
-	if !awsCodes(e.Settings.TOTP) {
-		return vault.Key{}, fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
+	if err := SourceEntry(h.store, src, k); err != nil {
+		return vault.Key{}, err
 	}
 	return src, nil
 }
 
-// awsCodes says whether p makes AWS's codes: SHA-1, 6 digits, every 30
+// SourceEntry says, as an error, why the TOTP entry src can't give the key
+// of k, the entry being set up: it isn't a TOTP entry, it's k, it isn't
+// there, or it makes codes AWS doesn't use.
+func SourceEntry(store vault.Store, src, k vault.Key) error {
+	switch {
+	case src.Kind != vault.KindTOTP:
+		return fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", src.String())
+	case src == k:
+		return fmt.Errorf("%s is the entry being set up", k)
+	}
+	e, err := store.Lookup(src)
+	if err != nil {
+		return fmt.Errorf("%s: %w", src, err)
+	}
+	if !AWSCodes(e.Settings.TOTP) {
+		return fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
+	}
+	return nil
+}
+
+// AWSCodes says whether p makes AWS's codes: SHA-1, 6 digits, every 30
 // seconds, whether those are given or left to their defaults.
-func awsCodes(p totp.Params) bool {
+func AWSCodes(p totp.Params) bool {
 	return (p.Algorithm == "" || strings.EqualFold(p.Algorithm, "SHA1")) && (p.Digits == 0 || p.Digits == 6) && (p.Period == 0 || p.Period == 30)
 }
 
@@ -598,34 +635,51 @@ func (h *AWSSetupHandler) promptForMFAARN(account string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		switch {
-		case !awsCLI.IsVirtualMFADevice(arn):
-			fmt.Println("❌ That isn't an authenticator app's ARN: it's shown on the user's Security credentials page, under MFA.")
-		case account != "" && awsCLI.AccountOf(arn) != account:
-			fmt.Printf("❌ That device is in account %s, but the profile signs in to account %s.\n", awsCLI.AccountOf(arn), account)
-		default:
-			return arn, nil
+		if err := CheckDevice(arn, account); err != nil {
+			fmt.Printf("❌ %s.\n", capitalized(err.Error()))
+			continue
 		}
+		return arn, nil
 	}
+}
+
+// CheckDevice says, as an error, why arn isn't the MFA device of a profile
+// signing in to account ("" when it isn't known): it isn't an
+// authenticator app's, or it's in another account.
+func CheckDevice(arn, account string) error {
+	switch {
+	case !awsCLI.IsVirtualMFADevice(arn):
+		return errors.New("that isn't an authenticator app's ARN: it's shown on the user's Security credentials page, under MFA")
+	case account != "" && awsCLI.AccountOf(arn) != account:
+		return fmt.Errorf("that device is in account %s, but the profile signs in to account %s", awsCLI.AccountOf(arn), account)
+	}
+	return nil
 }
 
 // showSetupCompletionMessage says the setup is done, and how to use it.
 func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
-	shellCmd, clipCmd := "sesh aws"+profileFlag(profile), "sesh aws"+profileFlag(profile)+" --clip"
-	fmt.Printf("\n✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\nAWS has just used the codes it was given: wait for the next one (up to 30 seconds) before the first sesh aws.\n",
-		profileName(profile), len(clipCmd), shellCmd, len(clipCmd), clipCmd)
+	fmt.Print("\n" + Done(profile, ""))
 }
 
 // showSignInCompletionMessage says the key is set up for a profile that
 // signs in with aws login, SSO or a role, and how sesh uses it.
 func (h *AWSSetupHandler) showSignInCompletionMessage(profile, kind string) {
+	fmt.Print("\n" + Done(profile, kind))
+}
+
+// Done says profile, of kind (SignInKind's), is set up, and how to use it,
+// line by line.
+func Done(profile, kind string) string {
 	flag := profileFlag(profile)
-	if kind == awsCLI.KindRole {
-		fmt.Printf("\n✅ sesh has the MFA key for %s. The AWS CLI asks for its code when it assumes the role:\n   sesh aws%s --clip  copies the code\n", profileName(profile), flag)
-		return
-	}
 	shellCmd, clipCmd := "sesh aws"+flag, "sesh aws"+flag+" --clip"
-	fmt.Printf("\n✅ sesh has the MFA key for %s, which signs in with %s.\n   %-*s  signs in when the session has ended, with the code on the clipboard, and opens a shell\n   %-*s  copies a code\n",
+	switch kind {
+	case "":
+		return fmt.Sprintf("✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\nAWS has just used the codes it was given: wait for the next one (up to 30 seconds) before the first sesh aws.\n",
+			profileName(profile), len(clipCmd), shellCmd, len(clipCmd), clipCmd)
+	case awsCLI.KindRole:
+		return fmt.Sprintf("✅ sesh has the MFA key for %s. The AWS CLI asks for its code when it assumes the role:\n   sesh aws%s --clip  copies the code\n", profileName(profile), flag)
+	}
+	return fmt.Sprintf("✅ sesh has the MFA key for %s, which signs in with %s.\n   %-*s  signs in when the session has ended, with the code on the clipboard, and opens a shell\n   %-*s  copies a code\n",
 		profileName(profile), kind, len(clipCmd), shellCmd, len(clipCmd), clipCmd)
 }
 

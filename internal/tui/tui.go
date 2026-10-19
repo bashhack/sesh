@@ -405,6 +405,8 @@ type Options struct {
 	// vault, before it starts, lets sesh lock (ui.lock_on_quit). nil: not
 	// offered.
 	AWSSignIn func(v Vault, k vault.Key) (signIn func() (shell func(release func()) error, err error), err error)
+	// AWSSetup is sesh aws setup, for the app's; nil: not offered.
+	AWSSetup AWSSetup
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -464,6 +466,8 @@ type Model struct {
 	// afterword is said once the app has ended, and then done.
 	afterword string
 	then      func(release func()) error
+	// awsSet is the AWS MFA setup under way, nil when none.
+	awsSet *awsSetting
 	// importing is the import being previewed; importAsk shows its form's
 	// password input, when the export asks for one, and importName says
 	// where it's from.
@@ -669,6 +673,7 @@ func (m *Model) wipe() {
 	clear(m.notesFailed)
 	clear(m.wraps)
 	m.hide()
+	m.endAWSSetup()
 	// A reveal still being read when this runs never comes back.
 	m.revealing = false
 }
@@ -991,6 +996,21 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotSyncSet(msg)
 	case awsSignedInMsg:
 		return m.awsSignedIn(&msg)
+	case awsProfilesMsg:
+		if msg.epoch == m.epoch && m.form != nil && slices.Contains(m.form.inputs, msg.in) {
+			msg.in.offers = msg.names
+		}
+		return nil
+	case awsCheckedMsg:
+		return m.awsChecked(&msg)
+	case awsKeyMsg:
+		return m.awsKeyRead(&msg)
+	case awsKeySavedMsg:
+		return m.awsKeySaved(&msg)
+	case awsDevicesMsg:
+		return m.awsDevices(&msg)
+	case awsDeviceSavedMsg:
+		return m.awsDeviceSaved(&msg)
 	case syncPanelMsg:
 		if isSyncPanel(m.ov) {
 			m.syncPanel = msg.st
