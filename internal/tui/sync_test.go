@@ -464,6 +464,7 @@ func TestSync_KeyNoteLate(t *testing.T) {
 		},
 		TakeKeyChange: func(_, _ []byte) (Changed, error) { return Changed{}, nil },
 		KeyChangeNote: func(Vault) string { return "" },
+		LeaveSync:     func() (string, error) { return "", nil },
 		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
 		Syncing:       func() bool { return true },
 	})
@@ -473,5 +474,13 @@ func TestSync_KeyNoteLate(t *testing.T) {
 	a.run(note)
 	if a.form != nil {
 		t.Errorf("the form opened with the sync panel gone: %+v", a.form)
+	}
+	// Nor over the leave question, which has the panel's title.
+	a.press("ctrl+g", ",", "enter")
+	_, note = a.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	a.press("x")
+	a.run(note)
+	if a.form != nil {
+		t.Errorf("the form opened over the leave question: %+v", a.form)
 	}
 }

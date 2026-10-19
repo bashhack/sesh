@@ -1271,7 +1271,7 @@ func TestUIKeyChangeNoteAgentLocked(t *testing.T) {
 	if n := lockAgentHoldingOldKey(); strings.HasPrefix(n, "warning") {
 		t.Fatal(n)
 	}
-	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") {
-		t.Errorf("the agent locked: %q, want nothing said of a forgery", note)
+	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") || !strings.Contains(note, "couldn't be checked yet") {
+		t.Errorf("the agent locked: %q, want it said the change is checked later, not a forgery", note)
 	}
 }

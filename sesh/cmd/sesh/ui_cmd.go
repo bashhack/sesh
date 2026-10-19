@@ -1021,10 +1021,10 @@ func uiKeyChangeNote(cfg *config.Config, v tui.Vault) string {
 		return ""
 	}
 	// Its key not in hand (the agent locked), the change's proof can't be
-	// checked: nothing's said of it, rather than its being forged, and the
-	// take, needing the vault too, finds it locked.
+	// checked yet: that's said, rather than its being forged. The take
+	// opens the vault with the password typed, and checks it then.
 	if u.store.CheckUnlocked() != nil {
-		return ""
+		return "sesh's agent is locked, so the change couldn't be checked yet: it's checked once this vault's master password is typed."
 	}
 	if answered, _ := statusProbing.answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
 		return "The sync folder isn't answering: taking the change needs it."

@@ -978,7 +978,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case keyNoteMsg:
 		// Only over the sync panel it was asked from: not over another
 		// form, nor once that panel's gone.
-		if msg.epoch != m.epoch || m.v == nil || m.form != nil || m.ov == nil || m.ov.title != "Sync" {
+		if msg.epoch != m.epoch || m.v == nil || m.form != nil || m.ov == nil || m.ov.kind != panelMenu || m.ov.title != "Sync" {
 			return nil
 		}
 		return m.keyChangeForm(msg.note)
