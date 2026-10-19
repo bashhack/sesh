@@ -19,7 +19,7 @@ import (
 
 // The AWS CLI as sesh aws's sign-in sees it; tests replace them.
 var (
-	awsProfileKind    = aws.ProfileKind
+	awsProfileKind    = aws.SignInKind
 	awsCallerIdentity = aws.CallerIdentity
 	awsRunLogin       = aws.RunCLIInteractive
 )

@@ -31,7 +31,7 @@ var (
 		return err
 	}
 	callerIdentity             = awsCLI.CallerIdentity
-	profileKind                = awsCLI.ProfileKind
+	profileKind                = awsCLI.SignInKind
 	listMFADevices             = awsCLI.ListMFADevices
 	readPassword               = term.ReadPassword
 	scanQRCode                 = qrcode.ScanQRCodeFull

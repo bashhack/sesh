@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -131,16 +132,20 @@ func TestAWSLogin_SignsIn(t *testing.T) {
 	}
 }
 
-// A profile the AWS CLI has nothing for (no files, here) signs in with
-// aws login, which sets it up, with the MFA code on the clipboard.
+// A profile the AWS CLI says has no credentials signs in with aws login,
+// which sets it up, with the MFA code on the clipboard.
 func TestAWSLogin_NotSetUp(t *testing.T) {
 	loginVault(t)
 	f := &fakeLogin{sessions: []error{errors.New("aws sts get-caller-identity: aws: [ERROR]: The config profile (work) could not be found"), nil}}
 	stubLogin(t, f)
-	awsProfileKind = aws.ProfileKind
+	awsProfileKind = aws.SignInKind
 	dir := t.TempDir()
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	cli := "#!/bin/sh\necho 'aws: [ERROR]: Unable to retrieve credentials: The config profile (work) could not be found' >&2\nexit 253\n"
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte(cli), 0o700); err != nil { //nolint:gosec // a test's AWS CLI
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	app, copied := cliApp("", true)
 	_, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell")
 	if err != nil {

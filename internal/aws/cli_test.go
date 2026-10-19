@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,18 +139,6 @@ region = us-east-1
 region = us-east-1
 ; login_session = commented out
 
-[profile inline]
-aws_access_key_id = AKIAEXAMPLE
-
-[profile process]
-credential_process = /usr/local/bin/creds
-
-[profile web]
-web_identity_token_file = /var/run/token
-
-[profile region-only]
-region = eu-west-1
-
 [profile sso]
 sso_session = corp
 
@@ -162,53 +151,20 @@ source_profile = keys
 
 [sso-session corp]
 sso_start_url = https://corp.awsapps.com/start
-
-[creds-only]
-aws_access_key_id = AKIANOTREAD
 `
-	creds := `[keys]
-aws_access_key_id = AKIAEXAMPLE
-aws_secret_access_key = secret
-
-[profile region-only]
-aws_access_key_id = AKIANOTREAD
-`
-	dir := t.TempDir()
-	write := func(name, text string) string {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("AWS_CONFIG_FILE", write("config", config))
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", write("credentials", creds))
-	// A profile with no credentials of its own signs in with aws login,
-	// which makes it: one with only a region, one in neither file, a
-	// section the config file doesn't read as a profile, and keys under a
-	// name the credentials file doesn't read as one.
-	for profile, want := range map[string]string{
-		"": "aws login", "keys": "", "inline": "", "process": "", "web": "",
-		"sso": "SSO", "sso-old": "SSO", "admin": "a role",
-		"region-only": "aws login", "missing": "aws login", "corp": "aws login", "creds-only": "aws login",
-	} {
+	t.Setenv("AWS_CONFIG_FILE", path)
+	for profile, want := range map[string]string{"": "aws login", "keys": "", "sso": "SSO", "sso-old": "SSO", "admin": "a role", "missing": "", "corp": ""} {
 		if got := ProfileKind(profile); got != want {
 			t.Errorf("ProfileKind(%q) = %q, want %q", profile, got, want)
 		}
 	}
-	// No files: nothing is set up, so aws login is the way in.
-	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "none"))
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none either"))
-	if got := ProfileKind("work"); got != "aws login" {
-		t.Errorf("no files: %q", got)
-	}
-	// A file that can't be read says nothing.
-	for _, env := range []string{"AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"} {
-		t.Setenv(env, dir) // a folder
-		if got := ProfileKind("work"); got != "" {
-			t.Errorf("%s unreadable: %q", env, got)
-		}
-		t.Setenv(env, filepath.Join(dir, "none"))
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	if got := ProfileKind(""); got != "" {
+		t.Errorf("no config file: %q", got)
 	}
 }
 
@@ -243,5 +199,45 @@ func TestAccountOf(t *testing.T) {
 		if got := AccountOf(arn); got != want {
 			t.Errorf("AccountOf(%q) = %q, want %q", arn, got, want)
 		}
+	}
+}
+
+// A profile ProfileKind takes for access keys is aws login only when the
+// AWS CLI says it has no credentials, or no profile by its name; anything
+// else keeps it as it was. A kind the config file says isn't asked about,
+// and the credentials printed when there are some aren't read.
+func TestSignInKind(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "config")
+	if err := os.WriteFile(config, []byte("[profile sso]\nsso_session = corp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", config)
+	asked := filepath.Join(dir, "asked")
+	t.Setenv("ASKED", asked)
+	for _, tc := range []struct{ name, cli, want string }{
+		{"credentials", `printf 'export AWS_ACCESS_KEY_ID=AKIAFAKE\n'`, ""},
+		{"none", `echo "aws: [ERROR]: An error occurred (Configuration): Unable to retrieve credentials: no credentials found" >&2; exit 253`, "aws login"},
+		{"older wording", `echo "Unable to locate credentials. You can configure credentials by running \"aws login\"." >&2; exit 253`, "aws login"},
+		{"no such profile", `echo "aws: [ERROR]: Unable to retrieve credentials: The config profile (work) could not be found" >&2; exit 253`, "aws login"},
+		{"another failure", `echo "aws: [ERROR]: [Errno 2] No such file or directory: '/opt/creds'" >&2; exit 255`, ""},
+		{"an older CLI", `echo "Unknown configure subcommand 'export-credentials'" >&2; exit 2`, ""},
+	} {
+		fakeCLI(t, `echo "$@" > "$ASKED"; `+tc.cli)
+		if got := SignInKind("work"); got != tc.want {
+			t.Errorf("%s: SignInKind = %q, want %q", tc.name, got, tc.want)
+		}
+		if b, err := os.ReadFile(asked); err != nil || strings.TrimSpace(string(b)) != "configure export-credentials --profile work" { //nolint:gosec // the test's own file
+			t.Errorf("%s: the CLI was asked %q (%v)", tc.name, b, err)
+		}
+	}
+	if err := os.Remove(asked); err != nil {
+		t.Fatal(err)
+	}
+	if got := SignInKind("sso"); got != KindSSO {
+		t.Errorf("an SSO profile: %q", got)
+	}
+	if _, err := os.Stat(asked); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the CLI was asked about an SSO profile: %v", err)
 	}
 }
