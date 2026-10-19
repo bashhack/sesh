@@ -45,11 +45,12 @@ type browserRequest struct {
 	Type string `json:"type"`
 	URL  string `json:"url,omitempty"`
 	ID   string `json:"id,omitempty"` // fill's entry
-	// generate's: a passphrase of Words words, or Length characters.
+	// generate's: a passphrase of Words words, or Length characters,
+	// with symbols unless Symbols is false.
+	Symbols    *bool  `json:"symbols,omitempty"`
 	Separator  string `json:"separator,omitempty"`
 	Length     int    `json:"length,omitempty"`
 	Words      int    `json:"words,omitempty"`
-	NoSymbols  bool   `json:"no_symbols,omitempty"`
 	Capitalize bool   `json:"capitalize,omitempty"`
 	Passphrase bool   `json:"passphrase,omitempty"`
 }
@@ -348,32 +349,29 @@ func browserFill(req *browserRequest, reply *browserReply) error {
 		return err
 	}
 	defer closeAuditStore(store)
-	e, err := store.Lookup(k)
+	// The site is checked on the row the secret is read from, at once, so
+	// a rename or an edit meanwhile can't swap in another site's.
+	e, secret, err := store.GetChecked(k, "secret, to fill it in on "+host, func(e *vault.Entry) error {
+		if !slices.ContainsFunc(entryURLs(e), func(u string) bool { return sitematch.Matches(u, scheme, host) }) {
+			return &browserError{"not_this_site", fmt.Sprintf("%s isn't for %s: sesh fills a login only on its own site", k, host)}
+		}
+		return nil
+	})
 	if errors.Is(err, vault.ErrNotFound) {
 		return &browserError{"not_found", fmt.Sprintf("sesh has no %s now", k)}
 	}
 	if err != nil {
 		return uiLocked(err)
 	}
-	if !slices.ContainsFunc(entryURLs(&e), func(u string) bool { return sitematch.Matches(u, scheme, host) }) {
-		return &browserError{"not_this_site", fmt.Sprintf("%s isn't for %s: sesh fills a login only on its own site", k, host)}
-	}
-	secret, err := store.GetFor(k, "secret, to fill it in on "+host)
-	if err != nil {
-		return uiLocked(err)
-	}
 	defer secure.SecureZeroBytes(secret)
 	reply.Username, reply.Password = e.Username, string(secret)
 	code := vault.Key{Kind: vault.KindTOTP, Service: k.Service, Username: k.Username}
-	switch c, err := store.Lookup(code); {
+	c, key, err := store.GetChecked(code, "TOTP key, to fill its code in on "+host, func(*vault.Entry) error { return nil })
+	switch {
 	case errors.Is(err, vault.ErrNotFound):
 	case err != nil:
 		return uiLocked(err)
 	default:
-		key, err := store.GetFor(code, "TOTP key, to fill its code in on "+host)
-		if err != nil {
-			return uiLocked(err)
-		}
 		defer secure.SecureZeroBytes(key)
 		if reply.TOTP, err = totp.CodeAt(key, c.Settings.TOTP, time.Now()); err != nil {
 			return fmt.Errorf("%s's code: %w", code, err)
@@ -385,7 +383,7 @@ func browserFill(req *browserRequest, reply *browserReply) error {
 // browserGenerate makes a new password, or passphrase, as sesh generate
 // does, with its defaults for what req leaves out; it's stored nowhere.
 func browserGenerate(req *browserRequest, reply *browserReply) error {
-	g := genFlags{length: 24, words: 6, separator: "-", noSymbols: req.NoSymbols, capped: req.Capitalize, passphrase: req.Passphrase}
+	g := genFlags{length: 24, words: 6, separator: "-", noSymbols: req.Symbols != nil && !*req.Symbols, capped: req.Capitalize, passphrase: req.Passphrase}
 	if req.Length != 0 {
 		g.length = req.Length
 	}
@@ -395,7 +393,12 @@ func browserGenerate(req *browserRequest, reply *browserReply) error {
 	if req.Separator != "" {
 		g.separator = req.Separator
 	}
-	if err := g.check(); err != nil {
+	// Said without the command line's flag names, which the popup hasn't.
+	check := g.charOptions().Check
+	if g.passphrase {
+		check = g.wordOptions().Check
+	}
+	if err := check(); err != nil {
 		return &browserError{"bad_request", err.Error()}
 	}
 	pw, err := g.generate()
@@ -425,6 +428,10 @@ func browserUnlockTouchID(reply *browserReply) error {
 	}
 	if err != nil {
 		return err
+	}
+	// Nothing's started for a vault Touch ID can't unlock here.
+	if !touchIDUsable(dbPath, mat.Verify) || overSSH() {
+		return &browserError{"no_touch_id", "Touch ID unlock isn't on for this vault (sesh touchid enable turns it on), or your fingerprints changed since it was: run any sesh command (or sesh ui) to unlock sesh with the master password"}
 	}
 	conn, err := agent.EnsureAgent()
 	if err != nil {

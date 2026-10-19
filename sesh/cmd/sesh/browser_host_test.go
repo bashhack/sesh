@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -98,6 +101,15 @@ func TestBrowserHost_Messages(t *testing.T) {
 	}
 }
 
+// browserSecret is k's secret in browserVault: each entry its own, so a
+// fill shows whose it gave.
+func browserSecret(k vault.Key) string {
+	if k.Kind == vault.KindTOTP {
+		return "JBSWY3DPEHPK3PXP"
+	}
+	return "pw for " + k.String()
+}
+
 // browserVault is a vault of logins with URLs, made with the master
 // password, which is then taken away: the host never has it.
 func browserVault(t *testing.T) {
@@ -129,7 +141,7 @@ func browserVault(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SaveWithDetails(&vault.Entry{Key: k}, []byte("JBSWY3DPEHPK3PXP"), &vault.Details{URL: e.url, Fields: e.fields}); err != nil {
+		if err := store.SaveWithDetails(&vault.Entry{Key: k}, []byte(browserSecret(k)), &vault.Details{URL: e.url, Fields: e.fields}); err != nil {
 			t.Fatalf("%s: %v", e.k, err)
 		}
 	}
@@ -238,15 +250,32 @@ func TestBrowserHost_Fill(t *testing.T) {
 		t.Fatalf("no agent, the password in the environment: %+v", r)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "")
+	// An agent running, but locked, and the password in the environment:
+	// still locked.
+	startTestAgent(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "browser-password-1234")
+	if r := fill("password/github/alice", "https://github.com/login"); r.Code != "locked" || r.Password != "" {
+		t.Fatalf("a locked agent, the password in the environment: %+v", r)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
 	unlockForBrowser(t)
+	before := time.Now()
 	r := fill("password/github/alice", "https://github.com/login")
-	if r.Status != "ok" || r.Username != "alice" || r.Password != "JBSWY3DPEHPK3PXP" || len(r.TOTP) != 6 {
+	after := time.Now()
+	codeAt := func(at time.Time) string {
+		c, err := totp.CodeAt([]byte("JBSWY3DPEHPK3PXP"), totp.Params{}, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if r.Status != "ok" || r.Username != "alice" || r.Password != "pw for password/github/alice" || r.TOTP != codeAt(before) && r.TOTP != codeAt(after) {
 		t.Fatalf("fill: %+v", r)
 	}
-	if r := fill("password/github/bob", "https://github.com/"); r.Status != "ok" || r.TOTP != "" {
+	if r := fill("password/github/bob", "https://github.com/"); r.Status != "ok" || r.Password != "pw for password/github/bob" || r.TOTP != "" {
 		t.Errorf("no TOTP entry, no code: %+v", r)
 	}
-	if r := fill("password/other/alice", "https://github.com/"); r.Status != "ok" || r.Password == "" {
+	if r := fill("password/other/alice", "https://github.com/"); r.Status != "ok" || r.Password != "pw for password/other/alice" {
 		t.Errorf("by its url-2: %+v", r)
 	}
 	for id, code := range map[string]string{
@@ -285,13 +314,44 @@ func TestBrowserHost_GenerateAndTouchID(t *testing.T) {
 	if r, err := askHost(t, framed(`{"type":"generate","passphrase":true,"words":4,"separator":"."}`)); err != nil || strings.Count(r.Password, ".") != 3 {
 		t.Errorf("a passphrase: %+v, %v", r, err)
 	}
-	if r, err := askHost(t, framed(`{"type":"generate","length":3}`)); err != nil || r.Code != "bad_request" || !strings.Contains(r.Message, "--length") {
-		t.Errorf("too short: %+v, %v", r, err)
+	if r, err := askHost(t, framed(`{"type":"generate","length":3}`)); err != nil || r.Code != "bad_request" || strings.Contains(r.Message, "--") {
+		t.Errorf("too short, said without the command line's flags: %+v, %v", r, err)
+	}
+	if r, err := askHost(t, framed(`{"type":"generate","symbols":false,"length":40}`)); err != nil || len(r.Password) != 40 || strings.ContainsAny(r.Password, "!@#$%^&*()-_=+[]{};:,.<>/?") {
+		t.Errorf("no symbols: %+v, %v", r, err)
 	}
 	was := touchIDPlatform
 	t.Cleanup(func() { touchIDPlatform = was })
 	touchIDPlatform = false
 	if r, err := askHost(t, framed(`{"type":"unlock_touchid"}`)); err != nil || r.Code != "no_touch_id" {
 		t.Errorf("no Touch ID: %+v, %v", r, err)
+	}
+	// On a Mac, Touch ID not on for this vault: refused, no agent started
+	// (tests can't start one, so one would be an error).
+	touchIDPlatform = true
+	if r, err := askHost(t, framed(`{"type":"unlock_touchid"}`)); err != nil || r.Code != "no_touch_id" {
+		t.Errorf("Touch ID off: %+v, %v", r, err)
+	}
+}
+
+// With Touch ID on, the extension unlocks sesh with a fingerprint, and can
+// then fill.
+func TestBrowserHost_TouchIDUnlocks(t *testing.T) {
+	startTestAgent(t)
+	prompts, _ := softwareTouchID(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	t.Setenv(config.EnvDBPath, createVaultWithTouchID(t)) // locked, Touch ID on
+	was := touchIDPlatform
+	t.Cleanup(func() { touchIDPlatform = was })
+	touchIDPlatform = true
+	if r, err := askHost(t, framed(`{"type":"status"}`)); err != nil || r.Locked == nil || !*r.Locked || r.TouchID == nil || !*r.TouchID {
+		t.Fatalf("locked, Touch ID on: %+v, %v", r, err)
+	}
+	if r, err := askHost(t, framed(`{"type":"unlock_touchid"}`)); err != nil || r.Status != "ok" || *prompts != 1 {
+		t.Fatalf("unlock: %+v, %v; prompts %d", r, err, *prompts)
+	}
+	if r, err := askHost(t, framed(`{"type":"status"}`)); err != nil || r.Locked == nil || *r.Locked {
+		t.Errorf("after the fingerprint: %+v, %v", r, err)
 	}
 }
