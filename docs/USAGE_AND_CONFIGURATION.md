@@ -324,7 +324,7 @@ $ sesh config set clipboard_timeout 15s
 | `sesh copy <entry>` | Copies its password, API key or note, a TOTP entry's current code, or a file entry's text; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
 | `sesh get <entry>` | Prints the same, for a pipe or a script; a file entry's file exactly as kept | `--username`, `--url`, `--field NAME`, as for copy; `--json`; `-o FILE` writes it to a file readable only by you |
 | `sesh code <entry>` | Prints a TOTP entry's current code, and how long it has left | `--json` |
-| `sesh show <entry>` | Shows the entry: its URL, folder, tags, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
+| `sesh show <entry>` | Shows the entry: its URL, folder, tags, an AWS profile's MFA device, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
 | `sesh open <entry>` | Opens its URL in the browser (http and https only) | |
 
 **Changing entries.**
@@ -332,7 +332,7 @@ $ sesh config set clipboard_timeout 15s
 | Command | What it does | Flags |
 |---------|--------------|-------|
 | `sesh add password\|key\|note\|totp\|file [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link; a file entry keeps a file whole | `--from FILE` (a file entry's file, which names it unless a name is given); `--username U`; `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]` (a password or passphrase, copied as it's saved); `--qr` (a TOTP key from a QR code on screen) or `--qr-image FILE` (from one in a PNG or JPEG); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
-| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--from FILE` (a file entry's new file); `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
+| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--from FILE` (a file entry's new file); `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--mfa-device ARN` (an AWS profile's MFA entry; `""` takes it out), `--force` |
 | `sesh generate` | Prints a new random password, stored nowhere | `--length N` (default 24), `--no-symbols`; or a passphrase: `--words N` (3 to 20), `--separator S` (default `-`), `--capitalize`; `--copy` copies it instead |
 | `sesh trash <entry>…` | Moves entries to the trash; asks first | `--purge` deletes for good; `--force` doesn't ask |
 | `sesh trash list\|restore\|remove\|empty` | The trash: see [The trash](#the-trash) | |
@@ -1026,7 +1026,7 @@ sesh show totp github --uri
 
 `sesh code` takes only TOTP entries, so `sesh code github` doesn't need `totp`. Near the end of a code's time (5 seconds or less), it prints the next code too. `sesh copy` and `sesh get` give a TOTP entry's current code, as they give another entry's secret.
 
-TOTP entries are entries like any other: they're in `sesh list`, `sesh search`, `sesh ui`, and exports. `sesh aws`'s MFA secret for a profile is the TOTP entry `aws` with the profile as its username (`totp/aws/default`), and it remembers the MFA device with it.
+TOTP entries are entries like any other: they're in `sesh list`, `sesh search`, `sesh ui`, and exports. `sesh aws`'s MFA secret for a profile is the TOTP entry `aws` with the profile as its username (`totp/aws/default`), and it remembers the MFA device with it: `sesh show` prints it, and `sesh edit totp/aws/work --mfa-device arn:aws:iam::123456789012:mfa/me` changes it (an authenticator app's ARN; `""` takes it out, and `sesh aws` then asks AWS for the user's device), as `sesh aws setup` sets it.
 
 ### Passwords, API Keys and Notes
 
