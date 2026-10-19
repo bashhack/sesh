@@ -397,6 +397,12 @@ type Options struct {
 	// the new one ("" for nothing). nil: not offered.
 	TakeKeyChange func(current, next []byte) (Changed, error)
 	KeyChangeNote func(v Vault) string
+	// AWSSignIn signs in to AWS with the profile whose MFA entry k is, as
+	// sesh aws --profile does, as far as it goes with the app open, and
+	// returns the shell to open once the app has ended; release, called
+	// once that shell no longer needs the vault, before it starts, lets
+	// sesh lock (ui.lock_on_quit). nil: not offered.
+	AWSSignIn func(v Vault, k vault.Key) (shell func(release func()) error, err error)
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -453,8 +459,9 @@ type Model struct {
 	clipUntil     time.Time // when the clipboard clears what was copied
 
 	quitErr error
-	// afterword is said once the app has ended.
+	// afterword is said once the app has ended, and then done.
 	afterword string
+	then      func(release func()) error
 	// importing is the import being previewed; importAsk shows its form's
 	// password input, when the export asks for one, and importName says
 	// where it's from.
@@ -980,6 +987,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case syncSetMsg:
 		return m.gotSyncSet(msg)
+	case awsSignedInMsg:
+		return m.awsSignedIn(&msg)
 	case syncPanelMsg:
 		if isSyncPanel(m.ov) {
 			m.syncPanel = msg.st

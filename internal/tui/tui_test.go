@@ -3670,3 +3670,61 @@ func TestAWSMFADevice(t *testing.T) {
 		t.Errorf("added: change = %+v", c)
 	}
 }
+
+// Ctrl-K on an AWS profile's entry signs in, then the app ends, leaving
+// the shell to open; AWS refusing is said, and the app stays; Esc while
+// it signs in leaves it, and nothing opens. Other entries aren't offered
+// it.
+func TestAWSSignIn(t *testing.T) {
+	f := newFake()
+	awsKey := vault.AWSKey("work")
+	f.entries = append([]vault.Entry{{Key: awsKey}}, f.entries...)
+	f.secrets[awsKey] = seed
+	var refuse error
+	var asked []vault.Key
+	opened := 0
+	a := newApp(t, f, Options{AWSSignIn: func(_ Vault, k vault.Key) (func(func()) error, error) {
+		asked = append(asked, k)
+		if refuse != nil {
+			return nil, refuse
+		}
+		return func(func()) error { opened++; return nil }, nil
+	}})
+	// Refused: said over the panel, which Enter closes.
+	refuse = errors.New("AWS refused the next code too")
+	a.press("ctrl+k", "a")
+	if s := a.screen(); a.quit || !strings.Contains(s, "Not signed in: AWS refused the next code too") {
+		t.Fatalf("refused:\n%s", s)
+	}
+	a.press("enter")
+	if a.ov != nil || a.quit {
+		t.Fatalf("after the refusal, Enter: panel %v, quit %v", a.ov, a.quit)
+	}
+	// Left with Esc while it signs in: the sign-in that ends after opens
+	// nothing.
+	refuse = nil
+	e := f.entries[0]
+	cmd := a.awsSignIn(&e)
+	if s := a.screen(); !strings.Contains(s, "Signing in to AWS") || !strings.Contains(s, "leave it") {
+		t.Errorf("while signing in:\n%s", s)
+	}
+	a.press("esc")
+	a.run(cmd)
+	if a.quit || a.Then() != nil {
+		t.Fatalf("left with Esc: quit %v", a.quit)
+	}
+	// Signed in: the app ends, and the shell is what's left to do.
+	a.press("ctrl+k", "a")
+	if !a.quit || a.Then() == nil {
+		t.Fatalf("signed in: quit %v\n%s", a.quit, a.screen())
+	}
+	if err := a.Then()(func() {}); err != nil || opened != 1 || len(asked) != 3 || asked[2] != awsKey {
+		t.Errorf("the shell: %v, opened %d; asked for %v", err, opened, asked)
+	}
+	// Another entry has no such action.
+	b := newApp(t, newFake(), Options{AWSSignIn: func(Vault, vault.Key) (func(func()) error, error) { return nil, nil }})
+	b.press("down", "ctrl+k")
+	if s := b.screen(); strings.Contains(s, "sign in to AWS") {
+		t.Errorf("a TOTP entry not an AWS profile's has it:\n%s", s)
+	}
+}

@@ -86,7 +86,7 @@ func runAWS(app *App, args []string) error {
 	// profile; the vault is opened only if a sign-in needs its MFA code.
 	if !setupAsked && !*clip {
 		if kind := awsProfileKind(flags.GetProfile()); kind != "" {
-			return runAWSLogin(app, flags.GetProfile(), kind, !flags.ShouldUseSubshell())
+			return runAWSLogin(app, flags.GetProfile(), kind, !flags.ShouldUseSubshell(), nil)
 		}
 	}
 	// Setup's checks come before the vault is opened, or made.
