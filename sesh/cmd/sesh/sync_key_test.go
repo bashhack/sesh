@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/syncfolder"
@@ -1228,5 +1229,49 @@ func TestUITakeKeyChangeFork(t *testing.T) {
 		if ch.Vault != nil {
 			ch.Vault.Close() //nolint:errcheck,gosec // test cleanup
 		}
+	}
+}
+
+// With the agent locked under the app's vault, the change's proof can't be
+// checked: the note says nothing of it, not that it's forged.
+func TestUIKeyChangeNoteAgentLocked(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	startTestAgent(t)
+	mat, err := database.ReadUnlockMaterial(ddb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Unlock(conn, []byte("old-password-1"), mat.Salt, mat.Verify, mat.Params); err != nil {
+		t.Fatal(err)
+	}
+	closeAgentConn(conn)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") {
+		t.Fatalf("unlocked: %q", note)
+	}
+	if n := lockAgentHoldingOldKey(); strings.HasPrefix(n, "warning") {
+		t.Fatal(n)
+	}
+	if note := uiKeyChangeNote(cfg, v); strings.Contains(note, "wasn't made by") {
+		t.Errorf("the agent locked: %q, want nothing said of a forgery", note)
 	}
 }

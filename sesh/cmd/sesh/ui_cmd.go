@@ -1020,6 +1020,12 @@ func uiKeyChangeNote(cfg *config.Config, v tui.Vault) string {
 	if !ok {
 		return ""
 	}
+	// Its key not in hand (the agent locked), the change's proof can't be
+	// checked: nothing's said of it, rather than its being forged, and the
+	// take, needing the vault too, finds it locked.
+	if u.store.CheckUnlocked() != nil {
+		return ""
+	}
 	if answered, _ := statusProbing.answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
 		return "The sync folder isn't answering: taking the change needs it."
 	}

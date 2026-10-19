@@ -453,3 +453,25 @@ func TestSync_TakeKeyChange(t *testing.T) {
 		t.Errorf("after: old closed %v\n%s", old.closed, a.screen())
 	}
 }
+
+// What to know before taking a change, come late, opens its form only
+// over the sync panel it was asked from.
+func TestSync_KeyNoteLate(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) {
+			return SyncState{Said: "~/sync", On: true, KeyChanged: true}, nil
+		},
+		TakeKeyChange: func(_, _ []byte) (Changed, error) { return Changed{}, nil },
+		KeyChangeNote: func(Vault) string { return "" },
+		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:       func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter")
+	_, note := a.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	a.press("esc", "esc", "esc")
+	a.run(note)
+	if a.form != nil {
+		t.Errorf("the form opened with the sync panel gone: %+v", a.form)
+	}
+}
