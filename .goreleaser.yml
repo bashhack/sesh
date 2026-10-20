@@ -37,8 +37,8 @@ builds:
 # The macOS binaries are signed with a Developer ID certificate and
 # notarized by Apple, so Gatekeeper lets a downloaded one run. It's on once
 # the certificate is given (isEnvSet counts "" as unset, which is what
-# GitHub passes for a secret that isn't); the release job refuses some of
-# the five secrets without the rest.
+# GitHub passes for a secret that isn't), so a local snapshot (make release)
+# builds unsigned; the release job refuses to run without all five secrets.
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'

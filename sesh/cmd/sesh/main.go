@@ -133,7 +133,7 @@ func checkCommandWord(args []string) error {
 		return nil
 	}
 	if strings.HasPrefix(args[1], "-") {
-		if isHelp(args[1]) || strings.TrimLeft(args[1], "-") == "version" {
+		if isHelp(args[1]) || args[1] == "--version" || args[1] == "-version" {
 			return nil
 		}
 		return fmt.Errorf("sesh takes a command first, not %q; the commands are listed by: sesh --help", args[1])

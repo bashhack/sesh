@@ -56,7 +56,7 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
-// --help lists every command on a line of its own, grouped, and no option of the old -service command line.
+// --help lists every command on a line of its own, grouped.
 func TestPrintUsage(t *testing.T) {
 	h := newTestHarness()
 	run(h.app, []string{"sesh", "--help"})
@@ -118,6 +118,7 @@ func TestRun_NotACommand(t *testing.T) {
 		"frobnicate":   `sesh has no command "frobnicate"; the commands are listed by: sesh --help`,
 		"--frobnicate": `sesh takes a command first, not "--frobnicate"`,
 		"-list":        `sesh takes a command first, not "-list"`,
+		"---version":   `sesh takes a command first, not "---version"`,
 	} {
 		h := newTestHarness()
 		code := -1
