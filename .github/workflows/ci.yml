@@ -228,9 +228,8 @@ jobs:
     if: github.ref_type == 'tag'
 
     # RELEASE_TOKEN is a fine-grained token with Contents read and write on
-    # bashhack/sesh (the release) and bashhack/homebrew-sesh (the formula).
-    # A release made with it, unlike one made with GITHUB_TOKEN, starts the
-    # workflows that run on releases (godoc.yml's pkg.go.dev update).
+    # bashhack/sesh (the release) and bashhack/homebrew-sesh (the formula):
+    # the job's own GITHUB_TOKEN can't write to another repository.
 
     permissions:
       contents: write
