@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh: one encrypted vault for your passwords, API keys, notes and TOTP secrets, and AWS sign-in with your MFA code.
 
-> **Requirements:** macOS or Linux. The vault, encrypted and unlocked with your master password, works the same on both; Touch ID unlock is macOS-only. For `sesh aws`, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS or Linux. The vault, encrypted and unlocked with your master password, works the same on both; Touch ID unlock is macOS-only. For `sesh aws`, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed.
 
 ## Workflow Overview
 
@@ -88,17 +88,6 @@ This will:
 2. **For TOTP**: Copy the current 6-digit code to the clipboard for immediate pasting into web forms; `sesh code github` prints it, with the seconds it has left
 
 Plain `sesh` prints the overview: every command, grouped, and, before there's a vault, the first steps to take. `sesh --help` prints just the commands, and `sesh <command> --help` (for example `sesh copy --help`) shows each command's own help, with examples. Flags can go anywhere among the words: `sesh copy github --field pin` and `sesh copy --field pin github` are the same.
-
-The flags of earlier versions of sesh (`--service`, `--action`, `--service-name`, `--list`, `--setup`, `--delete`, `--rekey` and the rest) are gone. Given one that named a command (`--service`, `--list`, `--delete`, `--setup`, `--clip`, `--rekey`, `--list-services`), sesh says what replaced it; any other flag in place of a command points to `sesh --help`:
-
-```
-$ sesh --rekey
-❌ sesh has no --rekey: sesh passwd
-$ sesh --delete password/github/alice
-❌ sesh has no --delete: sesh trash <entry>
-$ sesh --action get
-❌ sesh takes a command first, not "--action"; the commands are listed by: sesh --help
-```
 
 sesh replaces mobile and desktop authenticator apps like Authy and Google Authenticator. It works with any service that supports the standard TOTP protocol (RFC 6238).
 
@@ -348,7 +337,7 @@ $ sesh config set clipboard_timeout 15s
 | `sesh lock` | Locks sesh: the next command asks for the master password | |
 | `sesh passwd` | Changes the master password | |
 
-`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential`, `sesh browser` and `sesh ui` each have their own section below; `sesh config` and `sesh init` are in [Configuration file](#configuration-file).
+`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential`, `sesh browser`, `sesh sync` and `sesh ui` each have their own section below, and `sesh completion` one [above](#shell-completion); `sesh config` and `sesh init` are in [Configuration file](#configuration-file).
 
 ### AWS Options (`sesh aws`)
 
@@ -616,7 +605,7 @@ Restarted the sesh agent: it was running another sesh build (3f9a2c1b4d5e).
 If a release changes how sesh and the agent talk to each other, the new `sesh` can't send the old agent `stop`. Until the old agent is stopped, commands prompt on every run and warn with its pid and what to do:
 
 ```
-warning: sesh agent unavailable: agent protocol mismatch: agent (pid 12345) uses protocol version 1, this sesh uses 2; stop it with: kill 12345
+warning: sesh agent unavailable: agent protocol mismatch: agent (pid 12345) uses protocol version 2, this sesh uses 3; stop it with: kill 12345
 ```
 
 Run that `kill`; the next command starts the new version.
@@ -675,6 +664,7 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 - **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`). Weaker means neither its memory nor its passes is higher than configured, and at least one is lower; threads don't count. Raising them applies only when the key is made again, with `sesh passwd`. In a vault that syncs, the other computers take the change at their next sync. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
 - **Backups:** when the newest was made, how many are kept, and where. None, or a newest older than twice `backup.every_days`, is a warning.
 - **Sync:** off, or the sync folder, when the vault last synced with it, and how many changes wait to be sent and taken, without unlocking the vault or changing anything. A folder that can't be read, or is for another master password, fails. A folder that isn't there (a drive not connected) is a warning, as are entries waiting for the sync tool to download their files, files sealed with another master password's key, and files that can't be read. A master password change waiting to be sent, or one made on another computer and not taken here yet, is a warning too, with `sesh sync` to do. With the vault's key record damaged, the row isn't checked.
+- **Browser:** whether the browser extension is set up, and for which of Chrome and Firefox (`sesh browser install`). A browser's file that can't be read or starts another program, or a `browser-host` script that's missing or runs a `sesh` that isn't there, is a warning, with `sesh browser install` to do.
 - **Clipboard** (Linux only): the tool `sesh copy` copies with: `wl-copy`, `xclip` or `xsel`. None installed is a warning; no desktop session, as over SSH, is only noted.
 
 Then the vault:
@@ -1289,7 +1279,7 @@ For a very long list, `xargs` runs sesh more than once, and each run is all or n
   - **health report…** (`r`): what [`sesh health`](#password-health-sesh-health) finds, one row per problem: weak, reused, old, or unreadable. Enter on a row goes to its entry and opens its form; for a password, set to generate a new one. An unreadable one points to `sesh doctor`. Reading the secrets is one audit event;
   - **settings and safety…** (`,`): first, **Master password**: Enter asks for the current one and a new one, twice, and changes it as `sesh passwd` does: every entry is re-encrypted, Touch ID unlock and the recovery key go on working, and the change is recorded in the audit log. The app then goes on with the new one. A new password that's easy to guess is asked about once more. When there are backups from before, it offers to delete them and make a fresh one, since they still open with the old password. Then **Recovery key**, with its state. With none, Enter makes one. With one, it offers to make a new one (asking first, since the old one stops working) or to remove it. A new key is shown in the app and saved once you type its last group back, as `sesh recovery new` asks; Esc, three wrong tries, or the app locking leave it unsaved, so it opens nothing, and the app says so. A save that fails for a passing reason (the vault busy, say) can be tried again. Replacing or removing one offers to delete the backups made before, which it still opens. A key is made through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Then, on macOS, **Touch ID unlock**, with its state: on, off, out of date (your fingerprints changed), set up for another vault or an earlier master password, or its file can't be read, and whether Touch ID is usable here (it isn't over SSH). Enter turns it off when it's on, and on otherwise, as `sesh touchid enable` and `disable` do; taking it from another vault's file in the same folder asks first. It's turned on through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Once it's on, the app's locked screen offers your fingerprint (Enter with nothing typed), without starting the app again. Then **Sync**: off, or the sync folder and when the app last synced. Off, Enter asks for a folder (iCloud Drive's offered when there is one) and makes it this vault's sync folder, as `sesh sync init` does, then syncs; on each other computer, `sesh sync join` it. Syncing, Enter shows what `sesh sync status` says (the folder, the last sync, what waits to be sent or taken, and any warnings, each in full below while selected), with **sync now**, the last sync's results, and **leave…** (`x`), which asks first and does what `sesh sync leave` does. When the master password was changed on another computer, the row says so, and the panel has **take the new master password…** (`p`): it asks for this vault's master password, then the new one (checked against the sync folder's), re-encrypts the vault under it, and syncs, as `sesh sync` does; the app goes on with the vault opened with the new one. Then **Checks (sesh doctor)**: Enter runs `sesh doctor`'s checks on the vault as the app has it open, without asking for the master password again, and lists each result (with its details below while it's selected) and what to do; the run is recorded in the audit log, as `sesh doctor`'s is. Then **Audit log (sesh audit)**: Enter lists [its](#the-audit-log) newest 500 events, as `sesh audit` says them, with the whole of the selected one below; `p` prunes it, as `sesh audit prune` does: it asks how many days of events to keep (0 deletes them all), then for a yes. Then each [setting](#configuration-file), its value, and where it comes from. Enter changes one: an on-or-off one (`ui.lock_on_quit`, `agent.lock_on_sleep`, `agent.lock_on_screen_lock`) turns over at once; another is typed, checked as sesh checks it when it loads, and written to the config file, keeping its comments and order; an empty value takes it out, back to its default. The line below the list says when a change takes effect and the file it's saved in, which the first change makes if there isn't one yet. Lowering one that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go. A linked config file (a dotfile manager's) is changed where it lives. A setting made by an environment variable is changed there, and `db_path` by [moving the vault](#moving-the-vault);
   - **lock sesh** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so.
-  - **sync now** (`s`, when the vault syncs): syncs with the sync folder now, as `sesh sync` does but asking nothing, and says what it did; the item says when the app last synced. The app also syncs on its own while `sync.auto` is on (decided with the user): as it opens the vault, and again when it's unlocked after locking, to take what changed on the other computers; every few seconds, to send a change made in it; and every 5 minutes while it's open and unlocked. What moved is said in the status line, and every line the last sync that said something said is kept: **last sync's results** (`y`) lists them, each in full below while selected, until a sync says something new. A master password changed on another computer is said, and nothing syncs until it's taken, here or with `sesh sync`; a panel open when a sync takes changes is closed, as when another command changes the vault.
+  - **sync now** (`s`, when the vault syncs): syncs with the sync folder now, as `sesh sync` does but asking nothing, and says what it did; the item says when the app last synced. The app also syncs on its own while `sync.auto` is on: as it opens the vault, and again when it's unlocked after locking, to take what changed on the other computers; every few seconds, to send a change made in it; and every 5 minutes while it's open and unlocked. What moved is said in the status line, and every line the last sync that said something said is kept: **last sync's results** (`y`) lists them, each in full below while selected, until a sync says something new. A master password changed on another computer is said, and nothing syncs until it's taken, here or with `sesh sync`; a panel open when a sync takes changes is closed, as when another command changes the vault.
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
 - **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.
 - **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all before the cursor); Esc closes the key list, unmarks entries, clears the search, then the folder or tag picked, in that order, and quits when there's nothing left to clear; Ctrl-C quits. Quitting locks sesh, saying so (with `ui.lock_on_quit` off, sesh stays unlocked until the agent's idle timeout); `?`, with nothing searched, lists the keys.
@@ -1569,7 +1559,7 @@ git config --global credential.helper '!sesh git-credential'
 
 ### The browser extension (`sesh browser`)
 
-sesh's browser extension, [sesh-browser](https://github.com/bashhack/sesh-browser), fills a site's login from the vault, in Chrome and Firefox. It's being built, and is loaded by hand for now. It asks sesh, through the browser's native messaging, for the tab's site's logins; sesh does the work:
+sesh's browser extension, [sesh-browser](https://github.com/bashhack/sesh-browser), fills a site's login from the vault, in Chrome and Firefox. It isn't in the browsers' stores: load it by hand, as its README says. It asks sesh, through the browser's native messaging, for the tab's site's logins; sesh does the work:
 
 ```bash
 sesh browser install      # tell Chrome and Firefox where sesh is
@@ -1636,7 +1626,7 @@ sesh import --from bitwarden bitwarden_export.json
   - old passwords with `: ` in them, and old hidden-field values (see above);
   - passkeys;
   - Bitwarden's "ask for the master password again";
-  - bank accounts, driver's licences, and passports, which sesh can't import yet.
+  - bank accounts, driver's licences, and passports, which sesh doesn't import.
   - notes, a URL, or a field with a character sesh refuses (such as a control character); the rest of the item still comes across, and a plain field that a secret one could hold is made secret instead.
 - **The times** each item was made and last changed come across. An archived item becomes an ordinary entry, which the summary says.
 - **A plain export** holds every password unencrypted. sesh reminds you to delete it once the import is done.

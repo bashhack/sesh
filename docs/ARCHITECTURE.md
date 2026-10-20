@@ -511,6 +511,8 @@ Additional trust boundaries:
                              sesh inject's output, --editor temp files, sesh run's file copies)
    sesh → [TRUST BOUNDARY] → Child processes (sesh run's environment; git, through the credential helper)
    sesh → [TRUST BOUNDARY] → Browser (sesh open, http and https only)
+   sesh → [TRUST BOUNDARY] → Browser extension (sesh browser-host, started by the browser for
+                             sesh's extension only; one login per request, for the tab's site)
    sesh → [TRUST BOUNDARY] → Clipboard (pbcopy; wl-copy, xclip or xsel on Linux — visible to clipboard
                              managers; cleared after clipboard_timeout, 30s by default)
 ```
@@ -638,7 +640,8 @@ The dominant cost in any sesh invocation is unlocking the vault (deriving the ke
 
 ```
 sesh/
-├── sesh/cmd/sesh/         # Command layer: one file per command or group
+├── sesh/cmd/sesh/         # Command layer: one file per command or group (browser_host.go: the
+│                          #   program the browser extension talks to)
 ├── internal/              # Core implementation
 │   ├── password/          # Listing, search, sesh's export and import, generation, strength
 │   ├── tui/               # sesh ui
@@ -658,7 +661,8 @@ sesh/
 │   ├── recovery/          # The recovery key
 │   ├── backup/            # Automatic and manual backups, next to the vault
 │   ├── screenlock/        # Whether the Mac's screen is locked
-│   ├── importer/          # Other apps' exports: bitwarden, browser, gauth, keepass, seshexport
+│   ├── importer/          # Other apps' exports: bitwarden, browser, gauth, keepass, lpauth, seshexport
+│   ├── sitematch/         # Whether an entry's URL is a page's site, for the browser extension
 │   ├── secretref/         # sesh://<id>[#field] references, for run and inject
 │   ├── mask/              # Hiding secrets in sesh run's output
 │   ├── health/            # The password health report

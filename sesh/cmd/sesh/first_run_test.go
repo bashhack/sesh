@@ -85,14 +85,14 @@ func TestPlainSeshPrintsGettingStarted(t *testing.T) {
 	}
 }
 
-// An old option without a command fails, saying the command it became.
-func TestOldFlagsSayTheirCommand(t *testing.T) {
+// A flag where the command goes fails, saying a command comes first.
+func TestFlagFirstAsksForACommand(t *testing.T) {
 	h := newTestHarness()
 	exited := false
 	h.app.Exit = func(int) { exited = true }
 	run(h.app, []string{"sesh", "-list"})
-	if !exited || !strings.Contains(h.stderr.String(), "sesh has no --list: sesh list") {
-		t.Errorf("exited = %v, stderr = %q; want the no-provider error", exited, h.stderr.String())
+	if !exited || !strings.Contains(h.stderr.String(), `sesh takes a command first, not "-list"`) {
+		t.Errorf("exited = %v, stderr = %q; want the command-first error", exited, h.stderr.String())
 	}
 }
 

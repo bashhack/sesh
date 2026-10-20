@@ -6,7 +6,7 @@ This document describes the security architecture and privacy principles that gu
 
 sesh is built on three fundamental principles:
 
-1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, the terminal (`sesh get`, `sesh show --reveal`), a command (`sesh run`), a file (`sesh inject`, `sesh get -o`, a plain export), or git (`sesh git-credential`), which sends it to the site. For AWS, only the MFA code goes out, through the AWS CLI
+1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, the terminal (`sesh get`, `sesh show --reveal`), a command (`sesh run`), a file (`sesh inject`, `sesh get -o`, a plain export), git (`sesh git-credential`), which sends it to the site, or the [browser extension](#the-browser-extension), which fills it in on the site. For AWS, only the MFA code goes out, through the AWS CLI
 2. **Encryption at Rest**: every secret is encrypted with AES-256-GCM, under a key made from your master password with Argon2id, and each entry under a key of its own made from that one
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
@@ -14,7 +14,7 @@ sesh is built on three fundamental principles:
 
 sesh is designed to reduce exposure to:
 
-- **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
+- **Corporate Data Harvesting**: Unlike cloud password managers or corporate MFA apps, sesh never phones home
 - **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the vault's optional recovery key record and the optional Touch ID file, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: `sesh aws` puts AWS credentials only in the shell it starts, not in your own, unless `--no-subshell` asks it to print them for your own shell
@@ -358,6 +358,16 @@ Each computer keeps its own vault; a **sync folder**, which any tool carries bet
 - **Automatic sync** (`sync.auto`, on unless turned off) runs as the commands that use entries open and change the vault, and in `sesh ui` (at start, every 5 minutes, and after a change made in it). It asks for nothing: a master password changed on another computer isn't taken until `sesh sync` asks for it. It gives up on a folder that doesn't answer within 5 seconds.
 - **Not synced:** each computer's audit log, backups, Touch ID unlock, agent and config file (`config.toml`); and the oldest earlier secrets of an entry whose file would be over 64 MiB, which stay on the computer that has them.
 
+## The browser extension
+
+sesh's extension ([sesh-browser](https://github.com/bashhack/sesh-browser), for Chrome and Firefox) holds no vault and no key. It asks sesh, through the browser's native messaging, for one login at a time, and sesh decides what it gets:
+
+- **Who can ask:** `sesh browser install` registers `sesh browser-host` with each browser for sesh's extension only: Chrome's by its fixed extension ID, Firefox's by its add-on ID (`sesh@bashhack.github.io`). The browser refuses to start it for any other extension or page. A program running as you could still run `sesh browser-host` itself, as it could run any sesh command.
+- **What it gets:** a list of the logins whose URL is the tab's site (the same scheme, host and port: an https login is never offered to an http page, nor `github.com`'s to `gist.github.com`), then, when you choose one, that one login's username, password and TOTP code. sesh checks the site against the entry again in the same read of the vault, so a login is never given to a page it doesn't match. Each read is recorded in the audit log, naming the site.
+- **When:** only when you open the extension on a tab and choose a login. The extension can reach only that tab (the browser's `activeTab`), never fills a frame from another site, and keeps nothing once it closes.
+- **Unlocking:** never with the master password: the extension can't ask for it. When sesh is locked, it offers Touch ID if Touch ID unlock is on for this vault; otherwise a sesh command at the terminal unlocks it.
+- **Limits:** messages are capped (16 KiB in, 1 MB out). A page with a login form can see what's filled into it, as with any password manager: that's why sesh checks the site first.
+
 ## Comparison with Alternatives
 
 ### vs Mobile Authenticator Apps
@@ -370,12 +380,12 @@ Each computer keeps its own vault; a **sync folder**, which any tool carries bet
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | In the vault: a record for you, not tamper-proof |
 
-### vs Browser Extensions
+### vs Browser-Based Password Managers
 
-| Feature | Browser Extensions | sesh |
+| Feature | Browser-Based Managers | sesh |
 |---------|-------------------|------|
-| Attack Surface | Entire browser | Minimal CLI |
-| Permissions | Broad web access | Local only |
+| Where the vault is | In the extension, or a cloud account | A file on your machine; sesh's extension holds no vault |
+| Permissions | Often every site, all the time | sesh's extension: only the tab you open it on |
 | Updates | Auto/forced | User-controlled |
 | Code Visibility | Often obfuscated | Open source |
 
@@ -427,4 +437,4 @@ sesh provides a security model that prioritizes:
 3. **Transparency**: Honest about capabilities and limitations
 4. **User Control**: You own your authentication workflow
 
-While perfect security is impossible, sesh significantly improves upon mobile apps, browser extensions, and corporate MFA solutions by keeping your authentication local, private, and under your control.
+While perfect security is impossible, sesh significantly improves upon mobile apps, browser-based password managers, and corporate MFA solutions by keeping your authentication local, private, and under your control.

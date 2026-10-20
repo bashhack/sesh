@@ -29,18 +29,15 @@ comment:
   require_changes: no
 
 ignore:
-  # Match Makefile exclusions exactly
+  # The same as the Makefile's coverage targets leave out
   - "**/testutil/**"              # Test utilities
   - "**/*mock*"                   # Mock files
   - "**/provider/interfaces.go"   # Interface-only file
   - "scripts/**/*"                # Scripts directory
-  - "sesh/cmd/sesh/main.go"      # Main entry point
+  - "sesh/cmd/sesh/main.go"       # Main entry point
 
-  # Additional exclusions from original config
-  - "homebrew/**/*"               # Homebrew-related files
-  - "shell/**/*"                  # Shell integration files
+  # Not code
   - "docs/**/*"                   # Documentation
   - "**/*.md"                     # Markdown files
-  - "**/*.org"                    # Org mode files
   - "**/*_test.go"                # Test files
   - ".github/**/*"                # GitHub workflow files

@@ -26,15 +26,15 @@ In particular, I wanted fast, secure MFA support directly in the terminal—both
 - Web-based MFA flows where a TOTP secret is available
 - Secure storage for passwords, API keys, notes and files
 
-While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
+While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no bloat. Your security, your control, your terminal.
 
 ## Features
 
 - **Terminal App** — `sesh ui`: search every entry as you type, copy with Enter, and edit, file, and look after the vault, in one screen
-- **Encrypted Vault** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
+- **Encrypted Vault** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: your first `sesh add` creates it
 - **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle, after 8 hours, when the computer sleeps or (on macOS) its screen locks, and when you quit `sesh ui`, and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
-- **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
+- **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key; the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Sync Between Computers** — Each computer keeps its own vault; a sync folder that any tool carries (iCloud Drive, Dropbox, Syncthing, a USB stick) holds one encrypted file per entry. Commands and `sesh ui` sync on their own, an entry changed on two computers is merged field by field, the older change's password kept in its history, and a master password change or the recovery key reaches every computer ([Syncing between computers](docs/USAGE_AND_CONFIGURATION.md#syncing-between-computers-sesh-sync))
 - **Automatic Backups** — A copy of the encrypted vault each day, the newest 7 kept (`sesh backup`, `sesh restore`)
@@ -45,6 +45,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Health and Checks** — `sesh health` finds weak, reused and old passwords; `sesh doctor` checks the setup and that every entry can be read
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, secure notes, and files kept whole (a kubeconfig, a TLS key), each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
+- **Browser Extension** — `sesh browser install` connects [sesh-browser](https://github.com/bashhack/sesh-browser), which fills a site's login from the vault in Chrome and Firefox; it holds no vault, and isn't in the browsers' stores: load it by hand, as its README says ([The browser extension](docs/USAGE_AND_CONFIGURATION.md#the-browser-extension-sesh-browser))
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes

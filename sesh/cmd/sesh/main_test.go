@@ -71,11 +71,6 @@ func TestPrintUsage(t *testing.T) {
 			t.Errorf("--help is missing the group %q", group)
 		}
 	}
-	for _, old := range []string{"--service", "--action", "--list-services", "-rekey"} {
-		if strings.Contains(out, old) {
-			t.Errorf("--help still mentions %s", old)
-		}
-	}
 	if len(commands) != len(subcommands)+len(hiddenCommands) {
 		t.Errorf("%d commands run, %d are listed and %d hidden", len(commands), len(subcommands), len(hiddenCommands))
 	}
@@ -116,16 +111,13 @@ func TestAskedForHelp(t *testing.T) {
 	}
 }
 
-// A first word that isn't a command is refused, naming the closest; an old option names the command it became.
+// A first word that isn't a command is refused, naming the closest; a flag in its place asks for a command.
 func TestRun_NotACommand(t *testing.T) {
 	for args, wantSub := range map[string]string{
 		"lsit":         `sesh has no command "lsit"; did you mean: sesh list`,
 		"frobnicate":   `sesh has no command "frobnicate"; the commands are listed by: sesh --help`,
-		"--service":    "sesh has no --service: every kind of entry is in the same commands",
-		"-rekey":       "sesh has no --rekey: sesh passwd",
-		"--delete":     "sesh has no --delete: sesh trash <entry>",
-		"--clip":       "sesh has no --clip: sesh copy <entry>",
 		"--frobnicate": `sesh takes a command first, not "--frobnicate"`,
+		"-list":        `sesh takes a command first, not "-list"`,
 	} {
 		h := newTestHarness()
 		code := -1

@@ -398,7 +398,7 @@ func TestCheckCommandWord(t *testing.T) {
 		"sesh trsh":     `sesh has no command "trsh"; did you mean: sesh trash`,
 		"sesh":          "",
 		"sesh ui":       "",
-		"sesh --list":   "sesh has no --list: sesh list",
+		"sesh --list":   `sesh takes a command first, not "--list"; the commands are listed by: sesh --help`,
 		"sesh --help":   "",
 	} {
 		err := checkCommandWord(strings.Fields(args))

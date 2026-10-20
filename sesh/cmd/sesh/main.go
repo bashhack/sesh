@@ -126,31 +126,15 @@ var commands = map[string]func(*App, []string) error{
 // program starts them (the browser, browser-host).
 var hiddenCommands = map[string]bool{"browser-host": true}
 
-// movedFlags say, for a flag that named a command before sesh's commands
-// were words, the command it's become.
-var movedFlags = map[string]string{
-	"service":       "every kind of entry is in the same commands: sesh list, sesh copy, sesh add …",
-	"list":          "sesh list",
-	"delete":        "sesh trash <entry>",
-	"setup":         "sesh add totp, or sesh aws setup",
-	"clip":          "sesh copy <entry>",
-	"rekey":         "sesh passwd",
-	"list-services": "every kind of entry is in the same commands: sesh --help lists them",
-}
-
 // checkCommandWord refuses a first word that isn't a command, or --help
-// or --version, naming the command it's closest to, or the one an old flag
-// became.
+// or --version, naming the command it's closest to.
 func checkCommandWord(args []string) error {
 	if len(args) < 2 {
 		return nil
 	}
 	if strings.HasPrefix(args[1], "-") {
-		switch name := strings.TrimLeft(args[1], "-"); {
-		case isHelp(args[1]), name == "version":
+		if isHelp(args[1]) || strings.TrimLeft(args[1], "-") == "version" {
 			return nil
-		case movedFlags[name] != "":
-			return fmt.Errorf("sesh has no --%s: %s", name, movedFlags[name])
 		}
 		return fmt.Errorf("sesh takes a command first, not %q; the commands are listed by: sesh --help", args[1])
 	}
