@@ -227,8 +227,9 @@ jobs:
     needs: [lint, test, race, test-linux, agent-smoke]
     if: github.ref_type == 'tag'
 
-    # Requires a 'RELEASE_TOKEN' secret (personal access token with 'repo' permissions)
-    # The token allows GitHub release creation to trigger subsequent workflow runs
+    # RELEASE_TOKEN is a fine-grained token with Contents read and write on
+    # bashhack/sesh (the release) and bashhack/homebrew-sesh (the formula):
+    # the job's own GITHUB_TOKEN can't write to another repository.
 
     permissions:
       contents: write
