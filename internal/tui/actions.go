@@ -868,7 +868,7 @@ func (m *Model) drawOverlay(base string) string {
 			k = th.key(key)
 		}
 		if i == ov.sel {
-			return lipgloss.NewStyle().Background(th.selBg).Render(th.accented().Render("▌") + " " + fitTo(th.style().Bold(true).Render(text), w-12) + " " + k)
+			return th.selectedRow(text, w-12) + k
 		}
 		return "  " + fitTo(th.style().Render(text), w-12) + " " + k
 	}

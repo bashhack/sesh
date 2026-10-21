@@ -19,7 +19,8 @@ type theme struct {
 func newTheme(dark bool) theme {
 	c := lipgloss.LightDark(dark)
 	return theme{
-		accent:    c(lipgloss.Color("#6E40C9"), lipgloss.Color("#B392F0")),
+		// The logo's blue; for a dark terminal, a lighter blue of the same hue.
+		accent:    c(lipgloss.Color("#1165B1"), lipgloss.Color("#63ADEE")),
 		text:      c(lipgloss.Color("#1F2328"), lipgloss.Color("#E6EDF3")),
 		dim:       c(lipgloss.Color("#59636E"), lipgloss.Color("#8B949E")),
 		faint:     c(lipgloss.Color("#B7BDC8"), lipgloss.Color("#3D444D")),
@@ -27,8 +28,8 @@ func newTheme(dark bool) theme {
 		ok:        c(lipgloss.Color("#1A7F37"), lipgloss.Color("#3FB950")),
 		warn:      c(lipgloss.Color("#9A6700"), lipgloss.Color("#D29922")),
 		bad:       c(lipgloss.Color("#CF222E"), lipgloss.Color("#F85149")),
-		selBg:     c(lipgloss.Color("#F3EEFF"), lipgloss.Color("#2A2140")),
-		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#1B1325")),
+		selBg:     c(lipgloss.Color("#ECF3FB"), lipgloss.Color("#13233A")),
+		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0B1A2B")),
 		keyBg:     c(lipgloss.Color("#E6EAEF"), lipgloss.Color("#262C36")),
 	}
 }
@@ -38,6 +39,21 @@ func (t *theme) dimmed() lipgloss.Style { return lipgloss.NewStyle().Foreground(
 func (t *theme) lines() lipgloss.Style  { return lipgloss.NewStyle().Foreground(t.border) }
 func (t *theme) accented() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.accent)
+}
+
+// selectedRow is a panel's selected row up to its key: its bar, then
+// label cut or padded to w, and a space, on one band of the selection's
+// colour. The label's style, band and bold, is put back after each reset
+// in it, so a label with colours of its own (the trash's dimmed details,
+// a to-do's arrow) stays on the band, and bold.
+func (t *theme) selectedRow(label string, w int) string {
+	on := lipgloss.NewStyle().Background(t.selBg)
+	style := t.style().Bold(true).Background(t.selBg)
+	start, _, _ := strings.Cut(style.Render("x"), "x")
+	label = style.Render(ansi.Truncate(label, w, "…"))
+	label = strings.ReplaceAll(strings.ReplaceAll(label, "\x1b[0m", "\x1b[m"), "\x1b[m", "\x1b[m"+start)
+	pad := on.Render(strings.Repeat(" ", max(w-lipgloss.Width(label), 0)))
+	return t.accented().Background(t.selBg).Render("▌") + on.Render(" ") + label + pad + on.Render(" ")
 }
 
 // key is a key's name drawn as a key: a small label.
