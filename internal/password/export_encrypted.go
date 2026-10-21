@@ -42,17 +42,19 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 	var buf wipingBuffer
 	// The plain JSON is wiped however this ends.
 	defer func() { secure.SecureZeroBytes(buf.b) }()
-	count, err := m.Export(&buf, &ExportOptions{
+	inner := &ExportOptions{
 		Format:    FormatJSON,
 		EntryType: opts.EntryType,
 		Folder:    opts.Folder,
 		FolderSet: opts.FolderSet,
 		Tags:      opts.Tags,
 		History:   true,
-	})
+	}
+	count, err := m.Export(&buf, inner)
 	if err != nil {
 		return 0, err
 	}
+	opts.HistoryLeftOut = inner.HistoryLeftOut
 
 	salt := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {

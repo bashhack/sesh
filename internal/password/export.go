@@ -41,9 +41,12 @@ type ExportEntry struct {
 	Settings vault.Settings  `json:"settings,omitzero"`
 }
 
-// ExportEarlier is an earlier secret as an export holds it.
+// ExportEarlier is an earlier secret as an export holds it: when it was
+// replaced, when its use began, and a file's name with it.
 type ExportEarlier struct {
 	ReplacedAt time.Time `json:"replaced_at,omitzero"`
+	SetAt      time.Time `json:"set_at,omitzero"`
+	FileName   string    `json:"file_name,omitempty"`
 	Secret     string    `json:"secret"`
 }
 
@@ -78,7 +81,7 @@ func (e *ExportEntry) Earlier() ([]vault.Earlier, error) {
 			}
 			return nil, fmt.Errorf("an earlier secret: %w", err)
 		}
-		out = append(out, vault.Earlier{ReplacedAt: h.ReplacedAt, Secret: secret})
+		out = append(out, vault.Earlier{ReplacedAt: h.ReplacedAt, SetAt: h.SetAt, FileName: h.FileName, Secret: secret})
 	}
 	return out, nil
 }
@@ -139,9 +142,12 @@ type ExportOptions struct {
 	EntryType EntryType // empty means all types
 	// Folder, when FolderSet, keeps the entries in it or a folder under
 	// it ("" keeps those in none); Tags keeps those with all of them.
-	Folder    string
-	Tags      []string
-	FolderSet bool
+	Folder string
+	Tags   []string
+	// HistoryLeftOut is set by Export, with History: the entries some of
+	// whose earlier secrets couldn't be read (damage), left out.
+	HistoryLeftOut []string
+	FolderSet      bool
 	// History puts each entry's earlier secrets in a JSON export too, from
 	// a store that keeps them: the encrypted export sets it.
 	History bool
@@ -153,9 +159,10 @@ type ExportOptions struct {
 	KDF kdf.Params
 }
 
-// earlierReader is a store that keeps entries' earlier secrets.
-type earlierReader interface {
-	Earlier(k vault.Key, reading string) ([]vault.Earlier, error)
+// EarlierReader is a store that keeps entries' earlier secrets: those
+// that can be read, and whether any couldn't.
+type EarlierReader interface {
+	Earlier(k vault.Key, reading string) (earlier []vault.Earlier, partial bool, err error)
 }
 
 // Export decrypts entries and streams them to w, one at a time, so only
@@ -170,7 +177,7 @@ func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
 
 	switch opts.Format {
 	case "", FormatJSON:
-		return m.exportJSON(w, entries, opts.History)
+		return m.exportJSON(w, entries, opts)
 	case FormatCSV:
 		kept := slices.DeleteFunc(entries, func(e vault.Entry) bool { return e.Kind == vault.KindFile })
 		opts.LeftOut = len(entries) - len(kept)
@@ -183,11 +190,11 @@ func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
 // exportJSON writes entries as a JSON array, decrypting and marshaling one
 // record at a time. The output matches what json.Encoder.Encode on a full
 // slice would produce, but without holding every plaintext secret in
-// memory simultaneously. With history, each entry's earlier secrets go in
-// too.
-func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry, history bool) (int, error) {
-	earlier, _ := m.store.(earlierReader)
-	if !history {
+// memory simultaneously. With opts.History, each entry's earlier secrets
+// go in too.
+func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry, opts *ExportOptions) (int, error) {
+	earlier, _ := m.store.(EarlierReader)
+	if !opts.History {
 		earlier = nil
 	}
 	if _, err := io.WriteString(w, "["); err != nil {
@@ -234,16 +241,19 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry, history bool) (
 			return count, err
 		}
 		if earlier != nil {
-			versions, err := earlier.Earlier(e.Key, "to export")
+			versions, partial, err := earlier.Earlier(e.Key, "to export")
 			if err != nil {
 				return count, fmt.Errorf("read %s's earlier secrets: %w", e.Key, err)
+			}
+			if partial {
+				opts.HistoryLeftOut = append(opts.HistoryLeftOut, e.Key.String())
 			}
 			for _, v := range versions {
 				s := string(v.Secret)
 				if encoding == "base64" {
 					s = base64.StdEncoding.EncodeToString(v.Secret)
 				}
-				ee.History = append(ee.History, ExportEarlier{ReplacedAt: v.ReplacedAt, Secret: s})
+				ee.History = append(ee.History, ExportEarlier{ReplacedAt: v.ReplacedAt, SetAt: v.SetAt, FileName: v.FileName, Secret: s})
 				secure.SecureZeroBytes(v.Secret)
 			}
 		}
