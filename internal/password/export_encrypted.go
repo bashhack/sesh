@@ -48,6 +48,7 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 		Folder:    opts.Folder,
 		FolderSet: opts.FolderSet,
 		Tags:      opts.Tags,
+		History:   true,
 	})
 	if err != nil {
 		return 0, err

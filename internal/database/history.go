@@ -404,6 +404,31 @@ func (s *Store) History(k vault.Key) (_ []Version, err error) {
 	return out, rows.Err()
 }
 
+// Earlier is the entry k's earlier secrets, the newest first, each with
+// when it was replaced, for reading, which the audit log records for each.
+// One forgotten meanwhile is left out.
+func (s *Store) Earlier(k vault.Key, reading string) ([]vault.Earlier, error) {
+	versions, err := s.History(k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vault.Earlier, 0, len(versions))
+	for i, v := range versions {
+		secret, err := s.readVersion(k, v, i+2, reading)
+		if errors.Is(err, ErrVersionGone) {
+			continue
+		}
+		if err != nil {
+			for _, e := range out {
+				secure.SecureZeroBytes(e.Secret)
+			}
+			return nil, err
+		}
+		out = append(out, vault.Earlier{ReplacedAt: v.ReplacedAt, Secret: secret})
+	}
+	return out, nil
+}
+
 // version is the row of k's version n (2 and up).
 func (s *Store) version(k vault.Key, n int) (Version, error) {
 	versions, err := s.History(k)

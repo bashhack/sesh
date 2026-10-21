@@ -37,3 +37,24 @@ func TestEntries(t *testing.T) {
 		}
 	}
 }
+
+// An entry's earlier secrets come too, the newest first with when each was replaced, a file's decoded as its secret
+// is; one that won't decode skips the entry.
+func TestEntriesEarlier(t *testing.T) {
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	got := Entries([]password.ExportEntry{
+		{Service: "github", Type: vault.KindPassword, Secret: "now", History: []password.ExportEarlier{{ReplacedAt: at, Secret: "before"}, {Secret: "first"}}},
+		{Service: "kubeconfig", Type: vault.KindFile, Secret: "bm93", Encoding: "base64", History: []password.ExportEarlier{{ReplacedAt: at, Secret: "b2xk"}}},
+		{Service: "bad", Type: vault.KindFile, Secret: "bm93", Encoding: "base64", History: []password.ExportEarlier{{Secret: "not base64!"}}},
+	})
+	if e := got[0]; e.Skip != "" || len(e.Earlier) != 2 || string(e.Earlier[0].Secret) != "before" || !e.Earlier[0].ReplacedAt.Equal(at) ||
+		string(e.Earlier[1].Secret) != "first" || !e.Earlier[1].ReplacedAt.IsZero() {
+		t.Errorf("github: %+v", e)
+	}
+	if e := got[1]; e.Skip != "" || len(e.Earlier) != 1 || string(e.Earlier[0].Secret) != "old" || string(e.Secret) != "now" {
+		t.Errorf("kubeconfig: %+v", e)
+	}
+	if e := got[2]; !strings.Contains(e.Skip, "an earlier secret") || len(e.Secret) != 0 {
+		t.Errorf("bad: skipped %q, secret %q", e.Skip, e.Secret)
+	}
+}

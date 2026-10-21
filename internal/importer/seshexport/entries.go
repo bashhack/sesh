@@ -7,11 +7,12 @@ import (
 
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // Entries are the export's entries as sesh import brings them in: each
-// with its secret, details, folder, tags, settings and times. One sesh
-// can't hold is skipped, saying why.
+// with its secret, details, earlier secrets, folder, tags, settings and
+// times. One sesh can't hold is skipped, saying why.
 func Entries(list []password.ExportEntry) []*importer.Entry {
 	out := make([]*importer.Entry, 0, len(list))
 	for i := range list {
@@ -37,7 +38,14 @@ func Entries(list []password.ExportEntry) []*importer.Entry {
 				e.Skip = err.Error()
 				break
 			}
+			earlier, err := ee.Earlier()
+			if err != nil {
+				secure.SecureZeroBytes(secret)
+				e.Skip = err.Error()
+				break
+			}
 			e.Secret = secret
+			e.Earlier = earlier
 			e.Details = ee.Details()
 		}
 		out = append(out, importer.Checked(e))

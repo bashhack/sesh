@@ -744,6 +744,65 @@ func TestImport_Sesh(t *testing.T) {
 	}
 }
 
+// An encrypted export carries each entry's earlier secrets, with when each was replaced, and importing it brings
+// them back; a plain export leaves them out.
+func TestImport_SeshKeepsHistory(t *testing.T) {
+	src := openDoctorVault(t, importVault(t))
+	src.SetHistoryKeep(10)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	for _, secret := range []string{"pass-1", "pass-2", "pass-3"} {
+		if err := src.Put(gh, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file's earlier contents are any bytes, as its content is.
+	kube := vault.Key{Kind: vault.KindFile, Service: "kubeconfig"}
+	for _, content := range [][]byte{{0xff, 0x00, 0x01}, []byte("now")} {
+		if err := src.Put(kube, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := src.History(gh)
+	if err != nil || len(before) != 2 {
+		t.Fatalf("history %v, %v", before, err)
+	}
+	m := password.NewManager(src)
+	var plain bytes.Buffer
+	if _, err := m.Export(&plain, &password.ExportOptions{Format: password.FormatJSON}); err != nil || strings.Contains(plain.String(), "pass-1") {
+		t.Errorf("a plain export holds an earlier secret, or failed (%v):\n%s", err, plain.String())
+	}
+	var buf bytes.Buffer
+	if _, err := m.ExportEncrypted(&buf, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("export-pass-1234")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := importVault(t) // a new vault, to import into
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	readSecret = func() ([]byte, error) { return []byte("export-pass-1234"), nil }
+	if out, stderr, err := runImportOut(t, "y\n", true, "--from", "sesh", "--on-conflict", "skip", file); err != nil || !strings.Contains(out, "✅ Imported 2 entries from a sesh export.") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	store := openDoctorVault(t, dst)
+	if got, err := store.ReadVersion(kube, 2, "test"); err != nil || !bytes.Equal(got, []byte{0xff, 0x00, 0x01}) {
+		t.Errorf("kubeconfig's earlier content: %q, %v", got, err)
+	}
+	after, err := store.History(gh)
+	if err != nil || len(after) != 2 {
+		t.Fatalf("imported history %v, %v", after, err)
+	}
+	for i, want := range []string{"pass-2", "pass-1"} {
+		got, err := store.ReadVersion(gh, i+2, "test")
+		if err != nil || string(got) != want || !after[i].ReplacedAt.Equal(before[i].ReplacedAt) {
+			t.Errorf("version %d: %q (replaced %v), %v; want %q (replaced %v)", i+2, got, after[i].ReplacedAt, err, want, before[i].ReplacedAt)
+		}
+	}
+}
+
 // Replacing an AWS entry from sesh's export takes the export's device with its key; a new entry keeps its code
 // settings, tags, notes, fields and times. A file whose settings sesh refuses isn't asked a password for, and a plain
 // export is sent to --action import, with or without --from.
