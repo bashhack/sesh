@@ -556,5 +556,9 @@ func changeWord(part string, had, has bool) string {
 // and when it stopped being the secret (zero when the source doesn't say).
 type Earlier struct {
 	ReplacedAt time.Time
-	Secret     []byte
+	// SetAt is when its use began, zero when not known; FileName, a file
+	// entry's file's name with it.
+	SetAt    time.Time
+	FileName string
+	Secret   []byte
 }

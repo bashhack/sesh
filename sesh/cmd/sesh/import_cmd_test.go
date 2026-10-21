@@ -303,7 +303,7 @@ func TestImport_Bitwarden(t *testing.T) {
 		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
 		`        field "linked user" not kept`,
 		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
-		"Old passwords, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
+		"Earlier secrets, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
 		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
 		`named "GitHub (2)" in sesh: an entry before it has the name`,
@@ -317,7 +317,7 @@ func TestImport_Bitwarden(t *testing.T) {
 	t.Cleanup(func() { readSecret = old })
 	readSecret = func() ([]byte, error) { return []byte("export-pass-1"), nil }
 	out, stderr, err := runImportOut(t, "y\n", true, "--on-conflict", "skip", bitwardenFixture("password.json"))
-	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.\nKept 1 old password in their history") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.\nKept 1 earlier secret in their history") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
 		t.Fatalf("%q\n%s\n%v", out, stderr, err)
 	}
 	if strings.Contains(out, "delete") {
@@ -505,7 +505,7 @@ func TestImport_KeePass(t *testing.T) {
 		`"Home/Lab" is "Home-Lab" in sesh`,
 		`"Old account": in KeePass's recycle bin`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
-		"Old passwords, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
+		"Earlier secrets, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
 		"earlier versions with no other password to keep (sesh's history keeps old passwords only): 11\n",
 		"attachments (add each with sesh add file): 2\n",
 	} {
@@ -514,7 +514,7 @@ func TestImport_KeePass(t *testing.T) {
 		}
 	}
 	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", keepassFixture("app-kdbx4.xml"))
-	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from KeePass.\nKept 1 old password in their history") || !strings.Contains(out, "holds your passwords unencrypted") {
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from KeePass.\nKept 1 earlier secret in their history") || !strings.Contains(out, "holds your passwords unencrypted") {
 		t.Fatalf("%q, %v", out, err)
 	}
 	store := openDoctorVault(t, env)
@@ -641,9 +641,9 @@ func TestImport_ApplePasswordsRefusedCode(t *testing.T) {
 func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 	env := importVault(t)
 	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
-	for i, want := range []string{"Kept 1 old password in their history", ""} {
+	for i, want := range []string{"Kept 1 earlier secret in their history", ""} {
 		out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-		if err != nil || (want != "" && !strings.Contains(out, want)) || (want == "" && strings.Contains(out, "old password")) {
+		if err != nil || (want != "" && !strings.Contains(out, want)) || (want == "" && strings.Contains(out, "earlier secret")) {
 			t.Fatalf("import %d: %v\n%s", i+1, err, out)
 		}
 	}
@@ -661,13 +661,13 @@ func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 	}
 	putSecrets(t, gh, "mine-2")
 	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(out, "Not kept: 1 old password past history.keep (1), the oldest of those imported.") || strings.Contains(out, "Kept ") {
+	if err != nil || !strings.Contains(out, "Not kept: 1 earlier secret past history.keep (1), the oldest of those imported.") || strings.Contains(out, "Kept ") {
 		t.Errorf("no room: %v\n%s", err, out)
 	}
 
 	t.Setenv(config.EnvHistoryKeep, "0")
 	_, stderr, err := runImportOut(t, "", false, "--dry-run", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(stderr, "old passwords (history.keep is 0): 1\n") || strings.Contains(stderr, "for the entries' history") {
+	if err != nil || !strings.Contains(stderr, "earlier secrets (history.keep is 0): 1\n") || strings.Contains(stderr, "for the entries' history") {
 		t.Errorf("history.keep 0: %v\n%s", err, stderr)
 	}
 }
@@ -741,6 +741,144 @@ func TestImport_Sesh(t *testing.T) {
 	}
 	if _, _, err := runImportOut(t, "", true, "--from", "sesh", file, file); err == nil || !strings.Contains(err.Error(), "give one sesh export") {
 		t.Errorf("two files: %v", err)
+	}
+}
+
+// An encrypted export carries each entry's earlier secrets, with when each was replaced, and importing it brings
+// them back; a plain export leaves them out.
+func TestImport_SeshKeepsHistory(t *testing.T) {
+	src := openDoctorVault(t, importVault(t))
+	src.SetHistoryKeep(10)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	for _, secret := range []string{"pass-1", "pass-2", "pass-3"} {
+		if err := src.Put(gh, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file's earlier contents are any bytes, as its content is.
+	kube := vault.Key{Kind: vault.KindFile, Service: "kubeconfig"}
+	for _, content := range [][]byte{{0xff, 0x00, 0x01}, []byte("now")} {
+		if err := src.Put(kube, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := src.History(gh)
+	if err != nil || len(before) != 2 {
+		t.Fatalf("history %v, %v", before, err)
+	}
+	m := password.NewManager(src)
+	var plain bytes.Buffer
+	if _, err := m.Export(&plain, &password.ExportOptions{Format: password.FormatJSON}); err != nil || strings.Contains(plain.String(), "pass-1") {
+		t.Errorf("a plain export holds an earlier secret, or failed (%v):\n%s", err, plain.String())
+	}
+	var buf bytes.Buffer
+	if _, err := m.ExportEncrypted(&buf, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("export-pass-1234")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := importVault(t) // a new vault, to import into
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	readSecret = func() ([]byte, error) { return []byte("export-pass-1234"), nil }
+	if out, stderr, err := runImportOut(t, "y\n", true, "--from", "sesh", "--on-conflict", "skip", file); err != nil || !strings.Contains(out, "✅ Imported 2 entries from a sesh export.") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	store := openDoctorVault(t, dst)
+	if got, err := store.ReadVersion(kube, 2, "test"); err != nil || !bytes.Equal(got, []byte{0xff, 0x00, 0x01}) {
+		t.Errorf("kubeconfig's earlier content: %q, %v", got, err)
+	}
+	after, err := store.History(gh)
+	if err != nil || len(after) != 2 {
+		t.Fatalf("imported history %v, %v", after, err)
+	}
+	for i, want := range []string{"pass-2", "pass-1"} {
+		got, err := store.ReadVersion(gh, i+2, "test")
+		if err != nil || string(got) != want || !after[i].ReplacedAt.Equal(before[i].ReplacedAt) {
+			t.Errorf("version %d: %q (replaced %v), %v; want %q (replaced %v)", i+2, got, after[i].ReplacedAt, err, want, before[i].ReplacedAt)
+		}
+	}
+}
+
+// A file's earlier versions keep their file names through an export: restored after the import, one comes back with
+// its own.
+func TestImport_SeshKeepsEarlierFileNames(t *testing.T) {
+	src := openDoctorVault(t, importVault(t))
+	src.SetHistoryKeep(10)
+	kube := vault.Key{Kind: vault.KindFile, Service: "kubeconfig"}
+	for _, v := range []struct{ name, content string }{{"old.yaml", "v1"}, {"new.yaml", "v2"}} {
+		if err := src.Save(&vault.Entry{Key: kube, Settings: vault.Settings{FileName: v.name}}, []byte(v.content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	if _, err := password.NewManager(src).ExportEncrypted(&buf, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("export-pass-1234")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := importVault(t)
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	readSecret = func() ([]byte, error) { return []byte("export-pass-1234"), nil }
+	if _, stderr, err := runImportOut(t, "y\n", true, "--from", "sesh", "--on-conflict", "skip", file); err != nil {
+		t.Fatalf("%s\n%v", stderr, err)
+	}
+	store := openDoctorVault(t, dst)
+	if _, err := store.RestoreVersion(kube, 2); err != nil {
+		t.Fatal(err)
+	}
+	e, err := store.Lookup(kube)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Get(kube); err != nil || string(got) != "v1" || e.Settings.FileName != "old.yaml" {
+		t.Errorf("restored: %q named %q (%v), want v1 named old.yaml", got, e.Settings.FileName, err)
+	}
+}
+
+// An earlier secret that can't be read (damage) is left out of an encrypted export, which says whose; the export
+// still holds everything else.
+func TestExport_LeavesOutDamagedHistory(t *testing.T) {
+	env := importVault(t)
+	src := openDoctorVault(t, env)
+	src.SetHistoryKeep(10)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	for _, secret := range []string{"pass-1", "pass-2", "pass-3"} {
+		if err := src.Put(gh, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sqlExec(t, env.dbPath, `UPDATE history SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE id = (SELECT MIN(id) FROM history WHERE service = 'github')`)
+	opts := &password.ExportOptions{KDF: kdf.Minimum()}
+	var buf bytes.Buffer
+	n, err := password.NewManager(src).ExportEncrypted(&buf, opts, []byte("export-pass-1234"))
+	if err != nil || n != 2 {
+		t.Fatalf("exported %d, %v", n, err)
+	}
+	if !slices.Equal(opts.HistoryLeftOut, []string{gh.String()}) {
+		t.Errorf("left out %v, want github's", opts.HistoryLeftOut)
+	}
+	sealed, err := password.ReadSealed(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := sealed.Entries([]byte("export-pass-1234"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list {
+		if e.Key() == gh && (len(e.History) != 1 || e.History[0].Secret != "pass-2") {
+			t.Errorf("github's history in the export: %+v", e.History)
+		}
+	}
+	if got := historyLeftOut(opts.HistoryLeftOut); !strings.Contains(got, "Some earlier secrets of 1 entry couldn't be read (damaged), so aren't in it: password/github/alice") {
+		t.Errorf("the note: %q", got)
 	}
 }
 

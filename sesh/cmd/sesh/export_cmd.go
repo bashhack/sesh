@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -165,8 +166,26 @@ func runExport(app *App, args []string) error {
 	if *format != "encrypted" {
 		msg += ". It holds every secret unencrypted: delete it when you're done"
 	}
+	msg += historyLeftOut(opts.HistoryLeftOut)
 	_, err = fmt.Fprintln(app.Stderr, msg)
 	return err
+}
+
+// The vault's store gives an encrypted export each entry's earlier
+// secrets: without it, they'd be left out without a word.
+var _ password.EarlierReader = (*database.Store)(nil)
+
+// historyLeftOut says which entries' earlier secrets an export left out,
+// since they couldn't be read: "" for none.
+func historyLeftOut(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	named := keys
+	if len(named) > 3 {
+		named = append(slices.Clone(named[:3]), fmt.Sprintf("and %d more", len(keys)-3))
+	}
+	return fmt.Sprintf(". Some earlier secrets of %s couldn't be read (damaged), so aren't in it: %s; sesh doctor checks them", entryCount(len(keys)), strings.Join(named, ", "))
 }
 
 var errExportNeedsTerminal = errors.New("an encrypted export asks for its password at a terminal; --format json or csv writes one without")

@@ -257,6 +257,9 @@ func TestExportV011(t *testing.T) {
 		if string(e.Secret) != secrets[e.Key] || e.Settings != settings[e.Key] {
 			t.Errorf("%v: secret %q, settings %+v", e.Key, e.Secret, e.Settings)
 		}
+		if len(e.Earlier) != 0 {
+			t.Errorf("%v: %d earlier secrets, from an export that has none", e.Key, len(e.Earlier))
+		}
 		if e.Key == github {
 			if e.Folder != "work" || !slices.Equal(e.Tags, []string{"dev"}) {
 				t.Errorf("GitHub filed in %q, tagged %q", e.Folder, e.Tags)

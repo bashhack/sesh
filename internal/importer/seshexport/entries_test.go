@@ -1,6 +1,7 @@
 package seshexport
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,5 +36,37 @@ func TestEntries(t *testing.T) {
 		if !strings.Contains(got[i].Skip, wantSub) {
 			t.Errorf("entry %d skipped for %q, want %q", i, got[i].Skip, wantSub)
 		}
+	}
+}
+
+// An entry's earlier secrets come too, the newest first with when each was replaced, a file's decoded as its secret
+// is; one that won't decode skips the entry.
+func TestEntriesEarlier(t *testing.T) {
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	got := Entries([]password.ExportEntry{
+		{Service: "github", Type: vault.KindPassword, Secret: "now", History: []password.ExportEarlier{{ReplacedAt: at, Secret: "before"}, {Secret: "first"}}},
+		{Service: "kubeconfig", Type: vault.KindFile, Secret: "bm93", Encoding: "base64", History: []password.ExportEarlier{{ReplacedAt: at, Secret: "b2xk"}}},
+		{Service: "bad", Type: vault.KindFile, Secret: "bm93", Encoding: "base64", History: []password.ExportEarlier{{Secret: "not base64!"}}},
+	})
+	if e := got[0]; e.Skip != "" || len(e.Earlier) != 2 || string(e.Earlier[0].Secret) != "before" || !e.Earlier[0].ReplacedAt.Equal(at) ||
+		string(e.Earlier[1].Secret) != "first" || !e.Earlier[1].ReplacedAt.IsZero() {
+		t.Errorf("github: %+v", e)
+	}
+	if e := got[1]; e.Skip != "" || len(e.Earlier) != 1 || string(e.Earlier[0].Secret) != "old" || string(e.Secret) != "now" {
+		t.Errorf("kubeconfig: %+v", e)
+	}
+	if e := got[2]; !strings.Contains(e.Skip, "an earlier secret") || len(e.Secret) != 0 {
+		t.Errorf("bad: skipped %q, secret %q", e.Skip, e.Secret)
+	}
+}
+
+// An earlier version's file name sesh refuses is left out, saying so; its content still comes.
+func TestEntriesEarlierFileName(t *testing.T) {
+	got := Entries([]password.ExportEntry{{Service: "kubeconfig", Type: vault.KindFile, Secret: "bm93", Encoding: "base64",
+		History: []password.ExportEarlier{{FileName: "../evil\a", Secret: "b2xk"}, {FileName: "old.yaml", Secret: "b2xkZXI="}}}})
+	e := got[0]
+	if e.Skip != "" || len(e.Earlier) != 2 || e.Earlier[0].FileName != "" || string(e.Earlier[0].Secret) != "old" ||
+		e.Earlier[1].FileName != "old.yaml" || !slices.ContainsFunc(e.Changes, func(c string) bool { return strings.Contains(c, "file name") }) {
+		t.Errorf("%+v", e)
 	}
 }

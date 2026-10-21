@@ -334,13 +334,13 @@ func (p *importPlan) apply(store *database.Store) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "✅ Imported %s from %s.\n", what(done), p.f.source)
 	if history.Kept > 0 {
-		fmt.Fprintf(&b, "Kept %s in their history (sesh history <id> lists them).\n", nouns(history.Kept, "old password", "old passwords"))
+		fmt.Fprintf(&b, "Kept %s in their history (sesh history <id> lists them).\n", nouns(history.Kept, "earlier secret", "earlier secrets"))
 	}
 	if history.NoRoom > 0 {
-		fmt.Fprintf(&b, "Not kept: %s past history.keep (%d), the oldest of those imported.\n", nouns(history.NoRoom, "old password", "old passwords"), store.HistoryKeep())
+		fmt.Fprintf(&b, "Not kept: %s past history.keep (%d), the oldest of those imported.\n", nouns(history.NoRoom, "earlier secret", "earlier secrets"), store.HistoryKeep())
 	}
 	if history.TooLarge > 0 {
-		fmt.Fprintf(&b, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "old password", "old passwords"), database.MaxSecretSize)
+		fmt.Fprintf(&b, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "earlier secret", "earlier secrets"), database.MaxSecretSize)
 	}
 	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && (p.f.source == "Google Authenticator" || p.f.source == "LastPass Authenticator") {
 		k := write[i].Key
@@ -408,7 +408,7 @@ func fitHistory(e *importer.Entry, keep int) {
 	if e.Lost == nil {
 		e.Lost = map[string]int{}
 	}
-	e.Lost["old passwords (history.keep is 0)"] += len(e.Earlier)
+	e.Lost["earlier secrets (history.keep is 0)"] += len(e.Earlier)
 	for _, o := range e.Earlier {
 		secure.SecureZeroBytes(o.Secret)
 	}
@@ -579,7 +579,7 @@ func importSummary(f *found, fresh, clashes, skipped []*importer.Entry, onConfli
 		old += len(e.Earlier)
 	}
 	if old > 0 {
-		fmt.Fprintf(&b, "\nOld passwords, for the entries' history: up to %d (any an entry has already aren't added again)\n", old)
+		fmt.Fprintf(&b, "\nEarlier secrets, for the entries' history: up to %d (any an entry has already aren't added again)\n", old)
 	}
 	if len(lost) > 0 {
 		b.WriteString("\nNot kept:\n")

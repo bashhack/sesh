@@ -249,7 +249,7 @@ func (s *Store) sealEarlier(k vault.Key, secret, data, salt []byte, old *oldSecr
 		if err != nil {
 			return nil, fmt.Errorf("encrypt an earlier secret of %s: %w", k, err)
 		}
-		h.sealed = append(h.sealed, oldSecret{data: data, salt: salt, at: e.ReplacedAt})
+		h.sealed = append(h.sealed, oldSecret{data: data, salt: salt, at: e.ReplacedAt, set: e.SetAt, fileName: e.FileName})
 	}
 	return h, nil
 }
@@ -269,11 +269,16 @@ func (s *Store) keepImported(tx *sql.Tx, k vault.Key, h *importedHistory) error 
 	if !slices.EqualFunc(rows, h.had, func(r resealedHistory, id int64) bool { return r.id == id }) {
 		return ErrEntryChanged
 	}
-	// When an imported one was set isn't known: no later than replaced.
+	// When an imported one was set, when the import doesn't say: no later
+	// than replaced.
 	for i := range slices.Backward(h.sealed) {
 		o := &h.sealed[i]
-		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, set_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			string(k.Kind), k.Service, k.Username, o.data, o.salt, o.at.UTC(), o.at.UTC()); err != nil {
+		set := o.set
+		if set.IsZero() {
+			set = o.at
+		}
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, set_at, file_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			string(k.Kind), k.Service, k.Username, o.data, o.salt, o.at.UTC(), set.UTC(), o.fileName); err != nil {
 			return fmt.Errorf("keep %s's imported earlier secrets: %w", k, err)
 		}
 	}
@@ -400,6 +405,75 @@ func (s *Store) History(k vault.Key) (_ []Version, err error) {
 		}
 		v.ReplacedAt, _ = at.(time.Time)
 		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// Earlier is the entry k's earlier secrets, the newest first, each with
+// when it was replaced, when its use began and a file's name, for reading,
+// which the audit log records for each. One that can't be read (damage) is
+// left out, and partial says so; so is the whole history when it can't be
+// listed. An error is only one that should stop what's reading it: the
+// vault's key changed, or the key can't be had.
+func (s *Store) Earlier(k vault.Key, reading string) (_ []vault.Earlier, partial bool, err error) {
+	read, err := s.earlierRows(k)
+	if err != nil {
+		return nil, true, nil
+	}
+	out := make([]vault.Earlier, 0, len(read))
+	defer func() {
+		if err != nil {
+			for _, e := range out {
+				secure.SecureZeroBytes(e.Secret)
+			}
+		}
+	}()
+	for i, r := range read {
+		secret, err := s.oracle.DecryptEntry(r.data, r.salt, historyAAD(k))
+		if errors.Is(err, ErrDecrypt) {
+			if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+				return nil, false, kerr
+			}
+			partial = true
+			continue
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("decrypt %s's version %d: %w", k, i+2, err)
+		}
+		s.audit("access", k.String(), fmt.Sprintf("History: version %d, %s", i+2, reading))
+		replaced, _ := r.replaced.(time.Time)
+		set, _ := r.set.(time.Time)
+		out = append(out, vault.Earlier{ReplacedAt: replaced, SetAt: set, FileName: r.fileName, Secret: secret})
+	}
+	return out, partial, nil
+}
+
+// earlierRow is a history row as Earlier reads it.
+type earlierRow struct {
+	replaced, set any
+	fileName      string
+	data, salt    []byte
+}
+
+// earlierRows is k's history rows, the newest first.
+func (s *Store) earlierRows(k vault.Key) (_ []earlierRow, err error) {
+	rows, err := s.db.Query(`SELECT replaced_at, set_at, file_name, encrypted_data, salt FROM history WHERE kind = ? AND service = ? AND username = ? AND trash_id IS NULL ORDER BY id DESC`,
+		string(k.Kind), k.Service, k.Username)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	var out []earlierRow
+	for rows.Next() {
+		var r earlierRow
+		if err := rows.Scan(&r.replaced, &r.set, &r.fileName, &r.data, &r.salt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

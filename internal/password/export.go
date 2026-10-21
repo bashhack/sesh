@@ -29,13 +29,25 @@ type ExportEntry struct {
 	Secret    string    `json:"secret"`
 	// Encoding is "base64" for a file entry's content, which can be any
 	// bytes; "" means the secret is as it is.
-	Encoding string         `json:"encoding,omitempty"`
-	Folder   string         `json:"folder,omitempty"`
-	URL      string         `json:"url,omitempty"`
-	Notes    string         `json:"notes,omitempty"`
-	Tags     []string       `json:"tags,omitempty"`
-	Fields   []ExportField  `json:"fields,omitempty"`
-	Settings vault.Settings `json:"settings,omitzero"`
+	Encoding string        `json:"encoding,omitempty"`
+	Folder   string        `json:"folder,omitempty"`
+	URL      string        `json:"url,omitempty"`
+	Notes    string        `json:"notes,omitempty"`
+	Tags     []string      `json:"tags,omitempty"`
+	Fields   []ExportField `json:"fields,omitempty"`
+	// History is the entry's earlier secrets, the newest first, encoded as
+	// Secret is: only the encrypted export holds them.
+	History  []ExportEarlier `json:"history,omitempty"`
+	Settings vault.Settings  `json:"settings,omitzero"`
+}
+
+// ExportEarlier is an earlier secret as an export holds it: when it was
+// replaced, when its use began, and a file's name with it.
+type ExportEarlier struct {
+	ReplacedAt time.Time `json:"replaced_at,omitzero"`
+	SetAt      time.Time `json:"set_at,omitzero"`
+	FileName   string    `json:"file_name,omitempty"`
+	Secret     string    `json:"secret"`
 }
 
 // Key is the entry's key.
@@ -55,6 +67,23 @@ func (e *ExportEntry) SecretBytes() ([]byte, error) {
 		return b, nil
 	}
 	return nil, fmt.Errorf("its secret's encoding, %q, isn't one sesh writes", e.Encoding)
+}
+
+// Earlier is the entry's earlier secrets, the newest first, decoded as its
+// Encoding says, for the caller to zero.
+func (e *ExportEntry) Earlier() ([]vault.Earlier, error) {
+	out := make([]vault.Earlier, 0, len(e.History))
+	for _, h := range e.History {
+		secret, err := (&ExportEntry{Secret: h.Secret, Encoding: e.Encoding}).SecretBytes()
+		if err != nil {
+			for _, o := range out {
+				secure.SecureZeroBytes(o.Secret)
+			}
+			return nil, fmt.Errorf("an earlier secret: %w", err)
+		}
+		out = append(out, vault.Earlier{ReplacedAt: h.ReplacedAt, SetAt: h.SetAt, FileName: h.FileName, Secret: secret})
+	}
+	return out, nil
 }
 
 // Details is the entry's details, which the caller zeroes.
@@ -113,15 +142,27 @@ type ExportOptions struct {
 	EntryType EntryType // empty means all types
 	// Folder, when FolderSet, keeps the entries in it or a folder under
 	// it ("" keeps those in none); Tags keeps those with all of them.
-	Folder    string
-	Tags      []string
-	FolderSet bool
+	Folder string
+	Tags   []string
+	// HistoryLeftOut is set by Export, with History: the entries some of
+	// whose earlier secrets couldn't be read (damage), left out.
+	HistoryLeftOut []string
+	FolderSet      bool
+	// History puts each entry's earlier secrets in a JSON export too, from
+	// a store that keeps them: the encrypted export sets it.
+	History bool
 	// LeftOut is set by Export: the file entries a CSV export left out,
 	// since CSV holds text.
 	LeftOut int
 	// KDF is the Argon2id settings an encrypted export's password is
 	// stretched with; zero means kdf.Default().
 	KDF kdf.Params
+}
+
+// EarlierReader is a store that keeps entries' earlier secrets: those
+// that can be read, and whether any couldn't.
+type EarlierReader interface {
+	Earlier(k vault.Key, reading string) (earlier []vault.Earlier, partial bool, err error)
 }
 
 // Export decrypts entries and streams them to w, one at a time, so only
@@ -136,7 +177,7 @@ func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
 
 	switch opts.Format {
 	case "", FormatJSON:
-		return m.exportJSON(w, entries)
+		return m.exportJSON(w, entries, opts)
 	case FormatCSV:
 		kept := slices.DeleteFunc(entries, func(e vault.Entry) bool { return e.Kind == vault.KindFile })
 		opts.LeftOut = len(entries) - len(kept)
@@ -149,8 +190,13 @@ func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
 // exportJSON writes entries as a JSON array, decrypting and marshaling one
 // record at a time. The output matches what json.Encoder.Encode on a full
 // slice would produce, but without holding every plaintext secret in
-// memory simultaneously.
-func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
+// memory simultaneously. With opts.History, each entry's earlier secrets
+// go in too.
+func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry, opts *ExportOptions) (int, error) {
+	earlier, _ := m.store.(EarlierReader)
+	if !opts.History {
+		earlier = nil
+	}
 	if _, err := io.WriteString(w, "["); err != nil {
 		return 0, err
 	}
@@ -193,6 +239,23 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 		secure.SecureZeroBytes(secretBytes)
 		if err := m.exportDetails(e, &ee); err != nil {
 			return count, err
+		}
+		if earlier != nil {
+			versions, partial, err := earlier.Earlier(e.Key, "to export")
+			if err != nil {
+				return count, fmt.Errorf("read %s's earlier secrets: %w", e.Key, err)
+			}
+			if partial {
+				opts.HistoryLeftOut = append(opts.HistoryLeftOut, e.Key.String())
+			}
+			for _, v := range versions {
+				s := string(v.Secret)
+				if encoding == "base64" {
+					s = base64.StdEncoding.EncodeToString(v.Secret)
+				}
+				ee.History = append(ee.History, ExportEarlier{ReplacedAt: v.ReplacedAt, SetAt: v.SetAt, FileName: v.FileName, Secret: s})
+				secure.SecureZeroBytes(v.Secret)
+			}
 		}
 
 		b, err := json.MarshalIndent(ee, "  ", "  ") //nolint:gosec // plaintext export writes secrets by design; --format encrypted is the protected alternative

@@ -58,5 +58,5 @@ func (u *uiVault) Export(to string, pw []byte, replace bool, only tui.ExportOnly
 	if err := out.Finish(); err != nil {
 		return "", fmt.Errorf("write the export to %s: %w", tildePath(dest), err)
 	}
-	return fmt.Sprintf("Exported %s to %s.", entryCount(n), tildePath(dest)), nil
+	return fmt.Sprintf("Exported %s to %s%s.", entryCount(n), tildePath(dest), historyLeftOut(opts.HistoryLeftOut)), nil
 }
