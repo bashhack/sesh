@@ -1,6 +1,7 @@
 package seshexport
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,5 +57,16 @@ func TestEntriesEarlier(t *testing.T) {
 	}
 	if e := got[2]; !strings.Contains(e.Skip, "an earlier secret") || len(e.Secret) != 0 {
 		t.Errorf("bad: skipped %q, secret %q", e.Skip, e.Secret)
+	}
+}
+
+// An earlier version's file name sesh refuses is left out, saying so; its content still comes.
+func TestEntriesEarlierFileName(t *testing.T) {
+	got := Entries([]password.ExportEntry{{Service: "kubeconfig", Type: vault.KindFile, Secret: "bm93", Encoding: "base64",
+		History: []password.ExportEarlier{{FileName: "../evil\a", Secret: "b2xk"}, {FileName: "old.yaml", Secret: "b2xkZXI="}}}})
+	e := got[0]
+	if e.Skip != "" || len(e.Earlier) != 2 || e.Earlier[0].FileName != "" || string(e.Earlier[0].Secret) != "old" ||
+		e.Earlier[1].FileName != "old.yaml" || !slices.ContainsFunc(e.Changes, func(c string) bool { return strings.Contains(c, "file name") }) {
+		t.Errorf("%+v", e)
 	}
 }
