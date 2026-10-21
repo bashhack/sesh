@@ -552,7 +552,7 @@ It's listed in `subcommands` (completion and the dispatcher read that), run from
 
 ### Capability Evolution
 
-Optional interfaces, discovered at run time by type assertion: `SubshellProvider`, which `LaunchSubshell` looks for, and `QuietProvider` and `ClipChecker`, which `app.go` looks for. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
+An optional interface, discovered at run time by type assertion: `SubshellProvider`, which `LaunchSubshell` looks for. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
 
 ```go
 type SubshellProvider interface {

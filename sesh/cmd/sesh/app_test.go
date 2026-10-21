@@ -308,30 +308,19 @@ func TestApp_CopyToClipboard(t *testing.T) {
 	}
 }
 
-// clipCheckingMock is a provider that copies for only some requests.
-type clipCheckingMock struct {
-	*MockProvider
-	checkClip func() error
-}
-
-func (m clipCheckingMock) CheckClip() error { return m.checkClip() }
-
 // With no clipboard to copy to, --clip fails before fetching the secret,
 // so nobody unlocks the vault or answers an MFA prompt for nothing. Over
-// SSH it says what to do instead; a request the provider can't copy for is
-// refused as that first.
+// SSH it says what to do instead.
 func TestApp_CopyToClipboard_NoClipboard(t *testing.T) {
 	showFlag := func() []provider.FlagInfo { return []provider.FlagInfo{{Name: "show", Type: "bool"}} }
 	tests := map[string]struct {
-		clipErr   error
-		checkClip func() error
-		flags     func() []provider.FlagInfo
-		wantErr   string
+		clipErr error
+		flags   func() []provider.FlagInfo
+		wantErr string
 	}{
 		"over SSH, with --show": {clipErr: clipboard.ErrNoDisplay, flags: showFlag, wantErr: "can't copy: " + clipboard.ErrNoDisplay.Error() + "; use --show to print it instead"},
 		"over SSH, no --show":   {clipErr: clipboard.ErrNoDisplay, wantErr: "can't copy: " + clipboard.ErrNoDisplay.Error() + "; run it without --clip"},
 		"no tool":               {clipErr: &clipboard.MissingToolError{Install: "xclip or xsel"}, flags: showFlag, wantErr: "can't copy: no clipboard tool found: install xclip or xsel"},
-		"request can't copy":    {clipErr: clipboard.ErrNoDisplay, checkClip: func() error { return errors.New("--clip works with --action get, not store") }, wantErr: "--clip works with --action get, not store"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -351,11 +340,7 @@ func TestApp_CopyToClipboard_NoClipboard(t *testing.T) {
 					return provider.Credentials{CopyValue: "123456"}, nil
 				},
 			}
-			var p provider.ServiceProvider = mock
-			if tc.checkClip != nil {
-				p = clipCheckingMock{mock, tc.checkClip}
-			}
-			err := app.CopyToClipboard(p)
+			err := app.CopyToClipboard(mock)
 			if err == nil || err.Error() != tc.wantErr {
 				t.Errorf("err = %v, want %q", err, tc.wantErr)
 			}
