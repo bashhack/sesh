@@ -77,24 +77,26 @@ if ! curl -sfL -o "$TMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   exit 1
 fi
 
-# Verify checksum if checksums.txt is available
-if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
-  EXPECTED=$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
-  if [ -z "$EXPECTED" ]; then
-    echo "❌ Checksum entry for ${ARCHIVE} not found in checksums.txt"
-    exit 1
-  fi
-  if command -v sha256sum &>/dev/null; then
-    ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
-  else
-    ACTUAL=$(shasum -a 256 "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
-  fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
-    exit 1
-  fi
-  echo "✅ Checksum verified"
+# Every release has checksums.txt: the archive is checked against it.
+if ! curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
+  echo "❌ Couldn't download checksums.txt to check the archive against: $CHECKSUMS_URL"
+  exit 1
 fi
+EXPECTED=$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+if [ -z "$EXPECTED" ]; then
+  echo "❌ Checksum entry for ${ARCHIVE} not found in checksums.txt"
+  exit 1
+fi
+if command -v sha256sum &>/dev/null; then
+  ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+else
+  ACTUAL=$(shasum -a 256 "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+fi
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
+  exit 1
+fi
+echo "✅ Checksum verified"
 
 case "$ARCHIVE" in
   *.zip) unzip -q "$TMP_DIR/$ARCHIVE" -d "$TMP_DIR" ;;
