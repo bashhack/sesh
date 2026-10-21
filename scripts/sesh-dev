@@ -1,0 +1,31 @@
+#!/bin/bash
+# sesh-dev builds this checkout's sesh and runs it on a vault, config and
+# agent of its own, so the sesh you use day to day (Homebrew's, say), its
+# vault, its settings and its agent are never touched.
+#
+#   scripts/sesh-dev add password github --username alice
+#   scripts/sesh-dev ui
+#   SESH_DEV_DIR=$(mktemp -d) scripts/sesh-dev ...   # a throwaway one
+#
+# Everything lives in SESH_DEV_DIR (default ~/.local/share/sesh-dev): the
+# vault (passwords.db, with its backups and touchid.key beside it), the
+# config (config/sesh/config.toml) and the agent's socket (agent.sock).
+# The build is build/sesh-dev in this checkout, rebuilt on every run (Go's
+# cache makes an unchanged one quick); a changed build replaces the agent.
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+dir=${SESH_DEV_DIR:-$HOME/.local/share/sesh-dev}
+mkdir -p "$dir"
+chmod 700 "$dir"
+
+bin="$repo/build/sesh-dev"
+(cd "$repo" && go build -o "$bin" ./sesh/cmd/sesh)
+
+# Where the daily sesh's things are, from the shell, isn't inherited: a
+# sync or backup folder set there would otherwise be this vault's too.
+unset SESH_BACKUP_DIR SESH_SYNC_DIR SESH_SYNC_NAME
+export SESH_DB_PATH="$dir/passwords.db"
+export SESH_AUTH_SOCK="$dir/agent.sock"
+export XDG_CONFIG_HOME="$dir/config"
+exec "$bin" "$@"

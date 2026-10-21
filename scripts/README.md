@@ -15,6 +15,16 @@ Your config file (`~/.config/sesh/config.toml`) still applies.
 
 ## Scripts Overview
 
+### 🧰 `sesh-dev`
+**Purpose**: Build this checkout's sesh and run it on a vault, config and agent of its own (`SESH_DEV_DIR`, default `~/.local/share/sesh-dev`), apart from the sesh you use every day.
+
+```bash
+scripts/sesh-dev ui
+SESH_DEV_DIR=$(mktemp -d) SESH_MASTER_PASSWORD=throwaway scripts/sesh-dev list   # a throwaway vault
+```
+
+See [AGENTS.md](../AGENTS.md) for what it keeps apart, and what it doesn't.
+
 ### 🔐 `mock-totp-service.go`
 **Purpose**: Simulates an external TOTP service (like GitHub, Google, etc.) for testing the TOTP setup flow.
 
