@@ -43,13 +43,14 @@ func (t *theme) accented() lipgloss.Style {
 
 // selectedRow is a panel's selected row up to its key: its bar, then
 // label cut or padded to w, and a space, on one band of the selection's
-// colour. The band is put back
-// after each reset in label, so a label with colours of its own (the
-// trash's dimmed details, a to-do's arrow) stays on it.
+// colour. The label's style, band and bold, is put back after each reset
+// in it, so a label with colours of its own (the trash's dimmed details,
+// a to-do's arrow) stays on the band, and bold.
 func (t *theme) selectedRow(label string, w int) string {
 	on := lipgloss.NewStyle().Background(t.selBg)
-	start, _, _ := strings.Cut(on.Render("x"), "x")
-	label = t.style().Bold(true).Background(t.selBg).Render(ansi.Truncate(label, w, "…"))
+	style := t.style().Bold(true).Background(t.selBg)
+	start, _, _ := strings.Cut(style.Render("x"), "x")
+	label = style.Render(ansi.Truncate(label, w, "…"))
 	label = strings.ReplaceAll(strings.ReplaceAll(label, "\x1b[0m", "\x1b[m"), "\x1b[m", "\x1b[m"+start)
 	pad := on.Render(strings.Repeat(" ", max(w-lipgloss.Width(label), 0)))
 	return t.accented().Background(t.selBg).Render("▌") + on.Render(" ") + label + pad + on.Render(" ")

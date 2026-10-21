@@ -1254,20 +1254,27 @@ func TestActionMenu(t *testing.T) {
 	}
 }
 
-// cellBackgrounds is line's characters, and the true-colour background
-// code ("48;2;r;g;b", or "" for none) each is drawn on.
-func cellBackgrounds(line string) ([]rune, []string) {
+// cellBackgrounds is line's characters, the true-colour background code
+// ("48;2;r;g;b", or "" for none) each is drawn on, and whether each is bold.
+func cellBackgrounds(line string) ([]rune, []string, []bool) {
 	var text []rune
 	var bgs []string
-	bg := ""
+	var bolds []bool
+	bg, bold := "", false
 	for rest := line; rest != ""; {
 		if strings.HasPrefix(rest, "\x1b[") {
 			end := strings.IndexByte(rest, 'm')
 			params := strings.Split(rest[2:end], ";")
 			for k := 0; k < len(params); k++ {
 				switch p := params[k]; {
-				case p == "" || p == "0" || p == "49":
+				case p == "" || p == "0":
+					bg, bold = "", false
+				case p == "49":
 					bg = ""
+				case p == "1":
+					bold = true
+				case p == "22":
+					bold = false
 				case p == "48" && k+4 < len(params) && params[k+1] == "2":
 					bg = strings.Join(params[k:k+5], ";")
 					k += 4
@@ -1281,9 +1288,10 @@ func cellBackgrounds(line string) ([]rune, []string) {
 		c, size := utf8.DecodeRuneInString(rest)
 		text = append(text, c)
 		bgs = append(bgs, bg)
+		bolds = append(bolds, bold)
 		rest = rest[size:]
 	}
-	return text, bgs
+	return text, bgs, bolds
 }
 
 // bandCode is the background code the selection's colour is drawn with.
@@ -1301,7 +1309,7 @@ func TestMenuSelectedRowBand(t *testing.T) {
 		if !strings.Contains(ansi.Strip(line), "add an entry…") {
 			continue
 		}
-		runes, bgs := cellBackgrounds(line)
+		runes, bgs, _ := cellBackgrounds(line)
 		from := strings.Index(string(runes), "add an entry…")
 		from = utf8.RuneCountInString(string(runes)[:from]) + utf8.RuneCountInString("add an entry…")
 		// Up to the key's label, which starts with its own padding space.
@@ -1322,19 +1330,26 @@ func TestMenuSelectedRowBand(t *testing.T) {
 	t.Fatalf("no selected row:\n%s", a.screen())
 }
 
-// A selected row whose label has colours of its own (the trash's, a to-do's) stays on the band throughout.
+// A selected row whose label has colours of its own (the trash's, a to-do's) stays on the band, and bold, throughout.
 func TestSelectedRowStyledLabel(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		th := newTheme(dark)
 		label := th.accented().Render("→") + " run sesh doctor " + th.dimmed().Render("deleted 3 days ago")
 		row := th.selectedRow(label, 40)
-		runes, bgs := cellBackgrounds(row)
+		runes, bgs, bolds := cellBackgrounds(row)
 		if string(runes) != "▌ → run sesh doctor deleted 3 days ago     " {
 			t.Fatalf("dark %v: row %q", dark, string(runes))
 		}
 		for k, bg := range bgs {
 			if bg != bandCode(&th) {
 				t.Fatalf("dark %v: %q at %d isn't on the band: %q", dark, runes[k], k, row)
+			}
+		}
+		// The words after the arrow's colour are bold, as the row's are.
+		from := slices.Index(runes, 'r')
+		for k := from; k < from+len("run sesh doctor"); k++ {
+			if !bolds[k] {
+				t.Fatalf("dark %v: %q at %d isn't bold: %q", dark, runes[k], k, row)
 			}
 		}
 	}
