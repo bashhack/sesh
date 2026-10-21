@@ -293,6 +293,21 @@ make coverage
 make audit
 ```
 
+### Developing while using sesh every day
+
+`scripts/sesh-dev` builds this checkout and runs it on a vault, config and
+agent of its own (in `~/.local/share/sesh-dev`), so an installed sesh and its
+vault are never touched:
+
+```bash
+scripts/sesh-dev add password github --username alice
+scripts/sesh-dev ui
+```
+
+[AGENTS.md](AGENTS.md) has the rest: what the two still share (the browser
+extension, the clipboard), trying a dev build as your everyday sesh, and the
+rules for coding agents working on sesh.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
