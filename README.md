@@ -110,12 +110,13 @@ another app instead, start with [`sesh import`](#bringing-entries-over-and-takin
   clipboard clears itself. **Ctrl-Y** copies the username, and **Tab** reveals
   a hidden value.
 - **Ctrl-K** acts on the selected entry: edit it, copy any of its fields, open
-  its URL, go back to an earlier secret, or move it to the trash. **Space**
-  marks several, to file, tag or trash them together.
+  its URL, go back to an earlier secret, or move it to the trash. **↓**, then
+  **Space**, marks several, to file, tag or trash them together.
 - **Ctrl-G** does everything else: add an entry or generate a password,
   folders and tags, the trash, backups, import and export, AWS MFA setup and
   sign-in, the health report, and settings: the master password, the recovery
-  key, Touch ID, sync, and `sesh doctor`'s checks.
+  key, Touch ID, sync, `sesh doctor`'s checks, the audit log, and every
+  setting.
 - **?**, with nothing typed, lists every key. In a window at least 110 columns
   wide, folders and tags sit on the left.
 

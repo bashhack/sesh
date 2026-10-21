@@ -30,24 +30,31 @@ echo "📋 Installing to $INSTALL_DIR (standard user location)"
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   SHELL_RC=""
   if [[ "$SHELL" == */zsh ]]; then
-    SHELL_RC="$HOME/.zshrc"
+    SHELL_RC="${ZDOTDIR:-$HOME}/.zshrc"
   elif [[ "$SHELL" == */bash ]]; then
     SHELL_RC="$HOME/.bashrc"
   fi
 
   if [ -n "$SHELL_RC" ]; then
     if grep -q '/.local/bin' "$SHELL_RC" 2>/dev/null; then
-      echo "ℹ️ ~/.local/bin is already in $(basename "$SHELL_RC") — open a new terminal to pick it up"
+      echo "ℹ️ ~/.local/bin is already in $SHELL_RC — open a new terminal to pick it up"
     else
-      printf "⚠️ ~/.local/bin is not in your PATH. Add it to %s? [Y/n] " "$(basename "$SHELL_RC")"
-      REPLY=""
-      read -r REPLY 2>/dev/null || true
+      # The answer comes from the terminal, not stdin: run as curl … | bash,
+      # stdin is the script itself. With no terminal, the file is left alone.
+      REPLY=n
+      if { exec 3</dev/tty; } 2>/dev/null; then
+        printf "⚠️ ~/.local/bin is not in your PATH. Add it to %s? [Y/n] " "$SHELL_RC"
+        read -r REPLY <&3 || true
+        exec 3<&-
+      else
+        echo "⚠️ ~/.local/bin is not in your PATH."
+      fi
       if [[ "$REPLY" =~ ^[Nn]$ ]]; then
         echo "   To add it manually:"
         echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
       else
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-        echo "✅ Added ~/.local/bin to PATH in $(basename "$SHELL_RC")"
+        echo "✅ Added ~/.local/bin to PATH in $SHELL_RC"
         echo "   Run 'source $SHELL_RC' or open a new terminal to use sesh"
       fi
     fi
