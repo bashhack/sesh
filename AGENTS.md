@@ -117,6 +117,12 @@ nothing, so the extension only works after the `browser install` above.
 
 ## Changes
 
+- **What a released sesh wrote keeps working.** A change to how the vault, an
+  export or a sync folder is stored comes with a way to read what earlier
+  releases wrote: for the vault, a new upgrade step (`migrateVN` in
+  `internal/database/schema.go`, with `currentSchemaVersion` bumped), never an
+  edit to an old one. `internal/compat` keeps files written by released
+  versions, made-up, and tests that this sesh still reads them.
 - **One pull request per change**, each on its own branch (a git worktree per
   branch keeps them apart). Each is reviewed before it's merged, and CI must
   pass.

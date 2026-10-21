@@ -1,0 +1,14 @@
+{
+  "folder_id": "99c4e96e8369b1ca",
+  "key": {
+    "salt": "I2IBrQZ+T2iZ/QfLkDQl2L+xpnc+mldkt3xtnSszcOg=",
+    "verify": "BypsOOiF4aObyh6vnqkkKi4ny8gCy9fv2U+9IgIgApLDcSTVBINk",
+    "params": {
+      "time": 2,
+      "memory": 19456,
+      "threads": 1,
+      "key_len": 32
+    }
+  },
+  "format": 1
+}

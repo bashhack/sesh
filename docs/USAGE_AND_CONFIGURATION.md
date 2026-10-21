@@ -864,7 +864,7 @@ An export to a file, in any format, doesn't replace an existing one without `--f
 
 Encrypted exports use Argon2id and AES-256-GCM, as the vault does. The file holds its own salt and Argon2id settings, so it opens on any computer, whatever its master password, given the export password.
 
-Every export holds everything about each entry (CSV leaves out file entries, and says how many; JSON and the encrypted export include them): its kind, service name, username, secret, times, settings, folder, tags, URL, notes, and custom fields (secret ones included). A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
+Every export holds everything about each entry (CSV leaves out file entries, and says how many; JSON and the encrypted export include them): its kind, service name, username, secret, times, settings, folder, tags, URL, notes, and custom fields (secret ones included). Its earlier secrets (its [history](#password-history)) aren't included. A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
 
 ### Changing your master password (`sesh passwd`)
 
