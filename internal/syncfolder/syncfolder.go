@@ -67,8 +67,8 @@ const (
 	// what one request to the agent carries, encoded as it sends it.
 	MaxPiece = 1 << 20
 	// MaxFileSize is the most an entry file may be. An entry with large
-	// files and a long history can be over it; it can't be synced until
-	// its history is shorter.
+	// files and a long history can be over it: its oldest earlier secrets
+	// are left out of the file until it fits.
 	MaxFileSize = 64 << 20
 	// pieceOverhead is what sealing adds to each piece: its salt and
 	// length, and the sealing's nonce and tag.

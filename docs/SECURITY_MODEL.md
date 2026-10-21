@@ -279,7 +279,7 @@ $ env | grep -E '^(AWS|SESH)_'
 (nothing)
 
 # sesh subshell - credentials isolated here (a profile with access keys;
-# one that signs in with aws login or SSO gets AWS_PROFILE instead)
+# one that signs in with aws login or SSO gets AWS_PROFILE instead, when it's a named profile)
 $ sesh aws
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
 (sesh:aws) $ env | grep -E '^(AWS|SESH)_'
@@ -380,7 +380,7 @@ sesh's extension ([sesh-browser](https://github.com/bashhack/sesh-browser), for 
 |---------|-------------|------|
 | Storage Location | Phone (unknown security) | Encrypted vault on your machine |
 | Backup/Sync | Often cloud-based | Automatic local backups of the encrypted vault; sync between your computers through a folder of encrypted files any tool carries; encrypted export for moving elsewhere |
-| Privacy | Varies (often poor) | Local only; names, usernames and URLs are readable in the vault file |
+| Privacy | Varies (often poor) | On your computers, and in a sync folder if you set one up; names, usernames, URLs, folders, tags and settings are readable in the vault file |
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | In the vault: a record for you, not tamper-proof |
 

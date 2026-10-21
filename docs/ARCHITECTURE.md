@@ -41,7 +41,7 @@ Each component accesses only what it needs — nothing more. Secrets reach other
 
 Terminal users shouldn't need to context-switch to graphical tools. Subshells provide isolated environments, clipboard integration handles quick pastes, and all operations are scriptable.
 
-- Nothing needs a phone; a browser is used only for AWS sign-in (`aws login`, SSO) and the optional extension
+- Nothing needs a phone; a browser is used only for AWS sign-in (`aws login`, SSO), opening an entry's URL (`sesh open`, Ctrl-O in `sesh ui`), and the optional extension
 - Reduces friction in automated workflows
 - Scriptable from end to end
 
@@ -180,7 +180,7 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob are the vault's key record, one row in the database's `vault_key` table, so the vault is one file. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
 
-**Unlocking.** Every command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`, except `sesh browser-host`, which uses only an agent already unlocked for this vault: it never asks for the password, never reads `SESH_MASTER_PASSWORD`, and never starts an agent. For the rest:
+**Unlocking.** A command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`, apart from a few that unlock it their own way: `sesh recover` (with the recovery key), `sesh passwd` and taking a master password change from the sync folder, and `sesh browser-host`, which never asks for the password or reads `SESH_MASTER_PASSWORD`: it uses an agent already unlocked for this vault, or starts one only to unlock it with Touch ID. `buildKeySource`:
 
 1. It reads the vault's key record, which needs no key. With no record yet (the first run), it makes one: from `SESH_MASTER_PASSWORD` when that's set, otherwise from a new master password asked for twice, which then also unlocks the agent; at a terminal it also offers a recovery key and Touch ID.
 2. With `SESH_MASTER_PASSWORD` set, the agent is never used: the key is derived in this process on every run.
@@ -324,7 +324,7 @@ Syncing between computers is three parts, from the bottom up:
 
 - **`internal/syncfolder`: the folder.**
   - `sesh-sync.json` (`Info`): the folder's ID, the vault's key record, the links of master password changes (`KeyLink`: the old key sealed with the new, and a proof made with the old) and the shared recovery key's record (`SealedRecovery`).
-  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent or unlocked in that command) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last. A file may be at most 64 MiB: an entry whose file would be larger doesn't sync until its history is shorter.
+  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent or unlocked in that command) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last. A file may be at most 64 MiB: for an entry whose file would be larger, the oldest earlier secrets are left out of the folder until it fits (this computer keeps them).
   - A `Record` carries everything sync moves: the entry's name, secret, URL, notes, fields, settings (TOTP code settings, the AWS MFA device, a file's name), folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
   - `Merge` and `MergeWith` merge two records field by field against the one both came from (or none), the same whichever side is "ours".
   - `Scan` lists the folder: entry files (sync tools' conflict copies included, told apart by the uid inside, not the name), files iCloud hasn't downloaded, and files that can't be read. Every file is written whole (`atomicfile`).
@@ -512,7 +512,8 @@ Additional trust boundaries:
    sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures, backups,
                              sesh inject's output, --editor temp files, sesh run's file copies,
                              plain exports, which hold secrets unencrypted)
-   sesh → [TRUST BOUNDARY] → Sync folder (entry files and sesh-sync.json, sealed with the vault's key,
+   sesh → [TRUST BOUNDARY] → Sync folder (entry files, sealed with the vault's key, and sesh-sync.json: the
+                             key record and folder ID, with its key links and recovery key sealed;
                              carried by a sync tool you choose)
    sesh → [TRUST BOUNDARY] → Child processes (sesh run's environment)
    git  → [TRUST BOUNDARY] → sesh git-credential (git starts it; it answers on stdout)
