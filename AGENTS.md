@@ -117,6 +117,16 @@ nothing, so the extension only works after the `browser install` above.
 
 ## Changes
 
+- **What a released sesh wrote keeps working.** A change to how the vault, an
+  export or a sync folder is stored comes with a way to read what earlier
+  releases wrote: for the vault, a new upgrade step (`migrateVN` in
+  `internal/database/schema.go`, with `currentSchemaVersion` bumped), never an
+  edit to an old one. `internal/compat` keeps files written by released
+  versions, made-up, and tests that this sesh still reads them. A release
+  that changes a format adds its own (`testdata/<version>/`, made with that
+  release, as `testdata/v0.1.1/make.sh` does) and tests for them. Never edit
+  or remake a released version's files, or loosen these tests, to get a
+  failing one to pass: the failure is the point.
 - **One pull request per change**, each on its own branch (a git worktree per
   branch keeps them apart). Each is reviewed before it's merged, and CI must
   pass.
