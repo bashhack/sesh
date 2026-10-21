@@ -18,6 +18,11 @@ out=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 	exit 2
 }
 
+# Nothing from the caller's own sesh settings.
+for v in $(compgen -e | grep '^SESH_' || true); do
+	unset "$v"
+done
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/home" "$tmp/config" "$tmp/out"
@@ -25,7 +30,6 @@ export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config"
 export SESH_DB_PATH="$tmp/out/vault.db" SESH_AUTH_SOCK="$tmp/agent.sock"
 export SESH_MASTER_PASSWORD=fixture-v0.1.1-master SESH_SYNC_NAME=test-laptop
 export SESH_KDF_MEMORY=19MiB SESH_KDF_TIME=2 SESH_KDF_THREADS=1
-unset SESH_BACKUP_DIR SESH_SYNC_DIR
 
 printf 'gh-pass-1\n' | "$sesh" add password GitHub --username maya --url https://github.com/login --folder work --tag dev
 "$sesh" edit password/GitHub/maya --field recovery-email=maya@example.com
@@ -33,7 +37,9 @@ printf '4711\n' | "$sesh" edit password/GitHub/maya --secret-field pin
 printf 'Personal account. Recovery codes in the safe.\n' | "$sesh" edit password/GitHub/maya --notes
 printf 'gh-pass-2\n' | "$sesh" edit password/GitHub/maya --secret
 printf 'gh-pass-3\n' | "$sesh" edit password/GitHub/maya --secret
-printf 'JBSWY3DPEHPK3PXP\n' | "$sesh" add totp GitHub --username maya --folder work
+# A TOTP entry with settings of its own, which decide which codes are right.
+printf 'otpauth://totp/GitHub:maya?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA256&digits=8&period=60\n' |
+	"$sesh" add totp GitHub --username maya --folder work
 printf 'sk-test-0123456789abcdef\n' | "$sesh" add key OpenAI --folder work --tag dev
 printf 'Door code 4711\nAlarm 2580\n' | "$sesh" add note House --folder home
 printf 'apiVersion: v1\nkind: Config\n' >"$tmp/kubeconfig"
