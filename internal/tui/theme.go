@@ -28,7 +28,7 @@ func newTheme(dark bool) theme {
 		ok:        c(lipgloss.Color("#1A7F37"), lipgloss.Color("#3FB950")),
 		warn:      c(lipgloss.Color("#9A6700"), lipgloss.Color("#D29922")),
 		bad:       c(lipgloss.Color("#CF222E"), lipgloss.Color("#F85149")),
-		selBg:     c(lipgloss.Color("#EAF2FB"), lipgloss.Color("#13233A")),
+		selBg:     c(lipgloss.Color("#ECF3FB"), lipgloss.Color("#13233A")),
 		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0B1A2B")),
 		keyBg:     c(lipgloss.Color("#E6EAEF"), lipgloss.Color("#262C36")),
 	}
