@@ -2,7 +2,7 @@
 # make.sh writes this folder's export.sesh with sesh v0.1.2, all made-up: an
 # encrypted export whose entries carry earlier secrets (v0.1.2 is the first
 # release whose encrypted exports hold them). It's kept as v0.1.2 wrote it;
-# compat_test.go checks that today's sesh still reads it. Run it only to
+# v012_test.go checks that today's sesh still reads it. Run it only to
 # remake it, with v0.1.2:
 #
 #   internal/compat/testdata/v0.1.2/make.sh /path/to/sesh-0.1.2
