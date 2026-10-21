@@ -2,18 +2,21 @@
 
 This directory contains utility scripts to help with local development and testing of the `sesh` CLI tool. These scripts allow you to test AWS and TOTP flows without needing real AWS credentials or actual TOTP-enabled services.
 
-**Use a scratch vault.** The flows below add entries to whatever vault sesh opens, so point it at a throwaway one first:
-
-```bash
-export SESH_DB_PATH=/tmp/sesh-dev/passwords.db
-export SESH_AUTH_SOCK=/tmp/sesh-dev/agent.sock   # an agent of its own: the agent holds one vault's key at a time
-```
-
-Your config file (`~/.config/sesh/config.toml`) still applies.
+**Use a scratch vault.** The flows below add entries to whatever vault sesh opens, so run them through `sesh-dev` (below), which gives a build of this checkout a vault, config and agent of its own: `scripts/sesh-dev add totp …` in place of `sesh add totp …`.
 
 **QR codes on screen** are read only on macOS (`--qr`). On Linux, save a screenshot of the code and give it with `--qr-image shot.png`.
 
 ## Scripts Overview
+
+### 🧰 `sesh-dev`
+**Purpose**: Build this checkout's sesh and run it on a vault, config and agent of its own (`SESH_DEV_DIR`, default `~/.local/share/sesh-dev`), apart from the sesh you use every day.
+
+```bash
+scripts/sesh-dev ui
+SESH_DEV_DIR=$(mktemp -d) SESH_MASTER_PASSWORD=throwaway scripts/sesh-dev list   # a throwaway vault
+```
+
+See [AGENTS.md](../AGENTS.md) for what it keeps apart, and what it doesn't.
 
 ### 🔐 `mock-totp-service.go`
 **Purpose**: Simulates an external TOTP service (like GitHub, Google, etc.) for testing the TOTP setup flow.
