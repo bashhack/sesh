@@ -28,11 +28,11 @@ case "$dir" in
 esac
 
 # The command: the first word after any --db-path the arguments start with
-# (sesh takes it with one dash or two). has_db_path: one is given anywhere.
+# (sesh takes it with any number of dashes). has_db_path: one is given anywhere.
 cmd="" skip="" has_db_path=""
 for a in "$@"; do
 	case "$a" in
-	-db-path | --db-path | -db-path=* | --db-path=*) has_db_path=1 ;;
+	-*db-path | -*db-path=*) has_db_path=1 ;;
 	esac
 done
 for a in "$@"; do
@@ -41,8 +41,8 @@ for a in "$@"; do
 		continue
 	fi
 	case "$a" in
-	-db-path | --db-path) skip=1 ;;
-	-db-path=* | --db-path=*) ;;
+	-*db-path) skip=1 ;;
+	-*db-path=*) ;;
 	*)
 		cmd=$a
 		break
