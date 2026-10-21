@@ -7,20 +7,39 @@
 #   scripts/sesh-dev ui
 #   SESH_DEV_DIR=$(mktemp -d) scripts/sesh-dev ...   # a throwaway one
 #
-# Everything lives in SESH_DEV_DIR (default ~/.local/share/sesh-dev): the
-# vault (passwords.db, with its backups and touchid.key beside it), the
-# config (config/sesh/config.toml) and the agent's socket (agent.sock).
-# The build is build/sesh-dev in this checkout, rebuilt on every run (Go's
-# cache makes an unchanged one quick); a changed build replaces the agent.
+# Everything lives in SESH_DEV_DIR (default ~/.local/share/sesh-dev), which
+# must be an absolute path: the vault (passwords.db, with its backups and
+# touchid.key beside it), the config (config/sesh/config.toml) and the
+# agent's socket (agent.sock). The build is build/sesh-dev in this checkout,
+# rebuilt on every run (Go's cache makes an unchanged one quick); a changed
+# build replaces the agent.
 set -euo pipefail
 
-repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 dir=${SESH_DEV_DIR:-$HOME/.local/share/sesh-dev}
+case "$dir" in
+/*) ;;
+*)
+	# sesh ignores a config folder that isn't absolute, and would read the
+	# daily config instead.
+	echo "sesh-dev: SESH_DEV_DIR must be an absolute path, not $dir" >&2
+	exit 2
+	;;
+esac
+
+if [ "${1:-}" = browser ]; then
+	# The browser starts sesh by the path browser install writes, without
+	# this script's settings: it would run the dev build on the daily vault
+	# and agent.
+	echo "sesh-dev: browser install would point your browsers at the dev build, run on your daily vault and agent. AGENTS.md (\"Trying a dev build as the daily sesh\") says how to try the extension against one." >&2
+	exit 2
+fi
+
 mkdir -p "$dir"
 chmod 700 "$dir"
 
 bin="$repo/build/sesh-dev"
-(cd "$repo" && go build -o "$bin" ./sesh/cmd/sesh)
+(CDPATH='' cd -- "$repo" && go build -o "$bin" ./sesh/cmd/sesh)
 
 # Where the daily sesh's things are, from the shell, isn't inherited: a
 # sync or backup folder set there would otherwise be this vault's too.
@@ -28,4 +47,10 @@ unset SESH_BACKUP_DIR SESH_SYNC_DIR SESH_SYNC_NAME
 export SESH_DB_PATH="$dir/passwords.db"
 export SESH_AUTH_SOCK="$dir/agent.sock"
 export XDG_CONFIG_HOME="$dir/config"
+
+# sesh init offers the default vault location, not SESH_DB_PATH: given the
+# dev vault's, it doesn't ask.
+if [ "${1:-}" = init ] && [[ " $* " != *" --db-path"* ]]; then
+	set -- "$@" --db-path "$SESH_DB_PATH"
+fi
 exec "$bin" "$@"
