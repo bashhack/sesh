@@ -41,6 +41,20 @@ func (t *theme) accented() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.accent)
 }
 
+// selectedRow is a panel's selected row up to its key: its bar, then
+// label cut or padded to w, and a space, on one band of the selection's
+// colour. The band is put back
+// after each reset in label, so a label with colours of its own (the
+// trash's dimmed details, a to-do's arrow) stays on it.
+func (t *theme) selectedRow(label string, w int) string {
+	on := lipgloss.NewStyle().Background(t.selBg)
+	start, _, _ := strings.Cut(on.Render("x"), "x")
+	label = t.style().Bold(true).Background(t.selBg).Render(ansi.Truncate(label, w, "…"))
+	label = strings.ReplaceAll(strings.ReplaceAll(label, "\x1b[0m", "\x1b[m"), "\x1b[m", "\x1b[m"+start)
+	pad := on.Render(strings.Repeat(" ", max(w-lipgloss.Width(label), 0)))
+	return t.accented().Background(t.selBg).Render("▌") + on.Render(" ") + label + pad + on.Render(" ")
+}
+
 // key is a key's name drawn as a key: a small label.
 func (t *theme) key(name string) string {
 	return lipgloss.NewStyle().Foreground(t.accent).Background(t.keyBg).Bold(true).Padding(0, 1).Render(name)

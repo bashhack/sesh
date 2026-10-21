@@ -1254,63 +1254,90 @@ func TestActionMenu(t *testing.T) {
 	}
 }
 
+// cellBackgrounds is line's characters, and the true-colour background
+// code ("48;2;r;g;b", or "" for none) each is drawn on.
+func cellBackgrounds(line string) ([]rune, []string) {
+	var text []rune
+	var bgs []string
+	bg := ""
+	for rest := line; rest != ""; {
+		if strings.HasPrefix(rest, "\x1b[") {
+			end := strings.IndexByte(rest, 'm')
+			params := strings.Split(rest[2:end], ";")
+			for k := 0; k < len(params); k++ {
+				switch p := params[k]; {
+				case p == "" || p == "0" || p == "49":
+					bg = ""
+				case p == "48" && k+4 < len(params) && params[k+1] == "2":
+					bg = strings.Join(params[k:k+5], ";")
+					k += 4
+				case (p == "38" || p == "58") && k+1 < len(params) && params[k+1] == "2":
+					k += 4
+				}
+			}
+			rest = rest[end+1:]
+			continue
+		}
+		c, size := utf8.DecodeRuneInString(rest)
+		text = append(text, c)
+		bgs = append(bgs, bg)
+		rest = rest[size:]
+	}
+	return text, bgs
+}
+
+// bandCode is the background code the selection's colour is drawn with.
+func bandCode(th *theme) string {
+	r, g, b, _ := th.selBg.RGBA()
+	return fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, b>>8)
+}
+
 // A menu's selected row is one band of colour, across the gap between its label and its key.
 func TestMenuSelectedRowBand(t *testing.T) {
 	a := wideApp(t, newFake())
 	a.press("ctrl+g")
-	r, g, b, _ := a.th.selBg.RGBA()
-	want := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, b>>8)
+	want := bandCode(&a.th)
 	for line := range strings.SplitSeq(a.View().Content, "\n") {
 		if !strings.Contains(ansi.Strip(line), "add an entry…") {
 			continue
 		}
-		// The background each character is drawn on, from the line's colour codes.
-		var text strings.Builder
-		var bgs []string
-		bg := ""
-		for rest := line; rest != ""; {
-			if strings.HasPrefix(rest, "\x1b[") {
-				end := strings.IndexByte(rest, 'm')
-				params := strings.Split(rest[2:end], ";")
-				for k := 0; k < len(params); k++ {
-					switch p := params[k]; {
-					case p == "" || p == "0" || p == "49":
-						bg = ""
-					case p == "48" && k+4 < len(params) && params[k+1] == "2":
-						bg = strings.Join(params[k:k+5], ";")
-						k += 4
-					case (p == "38" || p == "58") && k+1 < len(params) && params[k+1] == "2":
-						k += 4
-					}
-				}
-				rest = rest[end+1:]
-				continue
-			}
-			c, size := utf8.DecodeRuneInString(rest)
-			text.WriteRune(c)
-			bgs = append(bgs, bg)
-			rest = rest[size:]
-		}
-		runes := []rune(text.String())
-		from := strings.Index(text.String(), "add an entry…")
-		from = utf8.RuneCountInString(text.String()[:from]) + utf8.RuneCountInString("add an entry…")
+		runes, bgs := cellBackgrounds(line)
+		from := strings.Index(string(runes), "add an entry…")
+		from = utf8.RuneCountInString(string(runes)[:from]) + utf8.RuneCountInString("add an entry…")
 		// Up to the key's label, which starts with its own padding space.
 		end := from
 		for end < len(runes) && runes[end] == ' ' {
 			end++
 		}
-		gap := end - 1 - from
+		if end-1-from < 10 {
+			t.Fatalf("no gap after the label: %q", line)
+		}
 		for k := from; k < end-1; k++ {
 			if bgs[k] != want {
 				t.Fatalf("the gap after the selected row's label isn't in the band, at %d: %q", k, line)
 			}
 		}
-		if gap < 10 {
-			t.Fatalf("no gap after the label: %q", line)
-		}
 		return
 	}
 	t.Fatalf("no selected row:\n%s", a.screen())
+}
+
+// A selected row whose label has colours of its own (the trash's, a to-do's) stays on the band throughout.
+func TestSelectedRowStyledLabel(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		th := newTheme(dark)
+		label := th.accented().Render("→") + " run sesh doctor " + th.dimmed().Render("deleted 3 days ago")
+		row := th.selectedRow(label, 40)
+		runes, bgs := cellBackgrounds(row)
+		if string(runes) != "▌ → run sesh doctor deleted 3 days ago     " {
+			t.Fatalf("dark %v: row %q", dark, string(runes))
+		}
+		for k, bg := range bgs {
+			if bg != bandCode(&th) {
+				t.Fatalf("dark %v: %q at %d isn't on the band: %q", dark, runes[k], k, row)
+			}
+		}
+	}
 }
 
 // Ctrl-G opens sesh's own actions from the search, the list or the sidebar; Ctrl-K with no entry to act on does too.

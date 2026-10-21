@@ -868,12 +868,7 @@ func (m *Model) drawOverlay(base string) string {
 			k = th.key(key)
 		}
 		if i == ov.sel {
-			// Each piece gets the band's background: a styled piece's reset
-			// would end one put around the whole row.
-			on := lipgloss.NewStyle().Background(th.selBg)
-			label := th.style().Bold(true).Background(th.selBg).Render(ansi.Truncate(text, w-12, "…"))
-			pad := on.Render(strings.Repeat(" ", max(w-12-lipgloss.Width(label), 0)))
-			return th.accented().Background(th.selBg).Render("▌") + on.Render(" ") + label + pad + on.Render(" ") + k
+			return th.selectedRow(text, w-12) + k
 		}
 		return "  " + fitTo(th.style().Render(text), w-12) + " " + k
 	}
