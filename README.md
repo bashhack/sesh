@@ -52,7 +52,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets (configurable: `clipboard_timeout`)
 - **AWS Sign-in Shell** — `sesh aws` opens a shell with the session's credentials and helper commands; they leave with the shell when it exits
 - **QR Codes** — Set up TOTP by selecting the QR code on screen (macOS) or from a screenshot or photo (`--qr-image`); move a key to your phone with `sesh show --qr`
-- **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate` does when storing a password
+- **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate --words 6` does when storing a password
 - **AWS Profiles and Several Accounts** — `sesh aws --profile production`; several accounts on one site, told apart by username
 - **Audit Logging** — Every secret read (except the TOTP codes `sesh ui` draws), change and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 

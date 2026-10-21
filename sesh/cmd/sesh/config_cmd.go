@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/config"
 )
@@ -153,17 +154,23 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	fmt.Fprintf(&b, "config file: %s\n\n", file)
 
 	items := cfg.List()
+	// Paths are usually longer than the value column: where each comes
+	// from goes on the next line.
+	onTwoLines := func(it config.Item) bool {
+		return it.Key == "db_path" || it.Key == "backup.dir" || it.Key == "sync.dir" && it.Value != "off"
+	}
 	col := 0 // the keys' column: the longest, and two spaces
 	for _, it := range items {
 		col = max(col, len(it.Key)+2)
 	}
 	for _, it := range items {
-		if it.Key == "db_path" || it.Key == "backup.dir" || it.Key == "sync.dir" && it.Value != "off" {
-			// Paths are usually longer than the value column.
+		if onTwoLines(it) {
 			fmt.Fprintf(&b, "%-*s%s\n%-*s(%s)\n", col, it.Key, it.Value, col, "", it.Said())
 			continue
 		}
-		fmt.Fprintf(&b, "%-*s%-14s(%s)\n", col, it.Key, it.Value, it.Said())
+		// The values' column is 14 wide; a longer value (a computer's
+		// name) keeps two spaces before where it comes from.
+		fmt.Fprintf(&b, "%-*s%-*s(%s)\n", col, it.Key, max(14, utf8.RuneCountInString(it.Value)+2), it.Value, it.Said())
 	}
 
 	_, err := io.WriteString(w, b.String())
