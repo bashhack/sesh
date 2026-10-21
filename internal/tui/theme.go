@@ -19,7 +19,8 @@ type theme struct {
 func newTheme(dark bool) theme {
 	c := lipgloss.LightDark(dark)
 	return theme{
-		accent:    c(lipgloss.Color("#6E40C9"), lipgloss.Color("#B392F0")),
+		// The logo's blue; for a dark terminal, a lighter blue of the same hue.
+		accent:    c(lipgloss.Color("#1165B1"), lipgloss.Color("#63ADEE")),
 		text:      c(lipgloss.Color("#1F2328"), lipgloss.Color("#E6EDF3")),
 		dim:       c(lipgloss.Color("#59636E"), lipgloss.Color("#8B949E")),
 		faint:     c(lipgloss.Color("#B7BDC8"), lipgloss.Color("#3D444D")),
@@ -27,8 +28,8 @@ func newTheme(dark bool) theme {
 		ok:        c(lipgloss.Color("#1A7F37"), lipgloss.Color("#3FB950")),
 		warn:      c(lipgloss.Color("#9A6700"), lipgloss.Color("#D29922")),
 		bad:       c(lipgloss.Color("#CF222E"), lipgloss.Color("#F85149")),
-		selBg:     c(lipgloss.Color("#F3EEFF"), lipgloss.Color("#2A2140")),
-		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#1B1325")),
+		selBg:     c(lipgloss.Color("#EAF2FB"), lipgloss.Color("#13233A")),
+		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#0B1A2B")),
 		keyBg:     c(lipgloss.Color("#E6EAEF"), lipgloss.Color("#262C36")),
 	}
 }
