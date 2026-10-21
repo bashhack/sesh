@@ -72,7 +72,7 @@ brew install bashhack/sesh/sesh
 
 # Option 2: The install script: downloads the latest release for this
 # computer, checks it against the release's checksums, and installs it
-# to ~/.local/bin (give a version, such as v0.1.0, to pin one)
+# to ~/.local/bin (for a given version: ... | bash -s -- v0.1.0)
 curl -fsSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
 
 # Option 3: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
