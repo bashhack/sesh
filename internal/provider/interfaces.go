@@ -66,23 +66,6 @@ type FlagInfo struct {
 	Required bool
 }
 
-// QuietProvider is an optional interface for providers that should not
-// print the app's generic "Generating credentials… / Credentials acquired
-// in Xs" framing. Useful for providers whose actions aren't a single
-// time-limited credential acquisition (e.g. password managers with store
-// / search / export / import sub-actions) and who produce their own
-// action-specific status via Credentials.DisplayInfo.
-type QuietProvider interface {
-	SuppressActionFraming() bool
-}
-
-// ClipChecker is an optional interface for a provider that copies for only
-// some requests: CheckClip refuses --clip for the others, before sesh looks
-// for a clipboard to copy to.
-type ClipChecker interface {
-	CheckClip() error
-}
-
 // SubshellProvider is an optional interface that providers can implement
 // if they support launching a customized subshell environment
 type SubshellProvider interface {

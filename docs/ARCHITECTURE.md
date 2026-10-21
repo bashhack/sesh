@@ -41,7 +41,7 @@ Each component accesses only what it needs — nothing more. Secrets reach other
 
 Terminal users shouldn't need to context-switch to graphical tools. Subshells provide isolated environments, clipboard integration handles quick pastes, and all operations are scriptable.
 
-- No dependency on phones or browsers
+- Nothing needs a phone; a browser is used only for AWS sign-in (`aws login`, SSO), opening an entry's URL (`sesh open`, Ctrl-O in `sesh ui`), and the optional extension
 - Reduces friction in automated workflows
 - Scriptable from end to end
 
@@ -67,6 +67,8 @@ The architecture follows a strict layering model where dependencies flow downwar
 │ • Flags, help,       │     │ • tui: sesh ui              │
 │   completion         │     │ • provider/aws, setup:      │
 │ • Subshell           │     │   AWS sign-in               │
+│                      │     │ • importer: other apps'     │
+│                      │     │   exports                   │
 └──────────────────────┘     └─────────────────────────────┘
            │                                │
            └────────────────┬───────────────┘
@@ -77,9 +79,9 @@ The architecture follows a strict layering model where dependencies flow downwar
                │                         │
                │ • Vault (SQLite,        │
                │   encrypted), agent     │
-               │ • Key settings, Touch ID│
-               │   recovery key          │
-               │ • Backups, imports      │
+               │ • Key settings,         │
+               │   Touch ID, recovery key│
+               │ • Backups               │
                │ • Sync folder, engine   │
                │ • TOTP generation       │
                │ • Secure memory         │
@@ -150,7 +152,7 @@ The subshell is a capability a provider may have; `LaunchSubshell` discovers it 
 
 ```go
 type SubshellProvider interface {
-    NewSubshellConfig(creds *Credentials) interface{}
+    NewSubshellConfig(creds *Credentials) any
 }
 ```
 
@@ -178,7 +180,7 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob are the vault's key record, one row in the database's `vault_key` table, so the vault is one file. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
 
-**Unlocking.** Every command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`:
+**Unlocking.** A command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`, apart from a few that unlock it their own way: `sesh recover` (with the recovery key), `sesh passwd` and taking a master password change from the sync folder, and `sesh browser-host`, which never asks for the password or reads `SESH_MASTER_PASSWORD`: it uses an agent already unlocked for this vault, or starts one only to unlock it with Touch ID. `buildKeySource`:
 
 1. It reads the vault's key record, which needs no key. With no record yet (the first run), it makes one: from `SESH_MASTER_PASSWORD` when that's set, otherwise from a new master password asked for twice, which then also unlocks the agent; at a terminal it also offers a recovery key and Touch ID.
 2. With `SESH_MASTER_PASSWORD` set, the agent is never used: the key is derived in this process on every run.
@@ -193,7 +195,7 @@ The store only sees a `database.CryptoOracle`, so it doesn't know whether the ag
 - A per-user Unix socket, `<user cache dir>/sesh/agent.sock` (`SESH_AUTH_SOCK` overrides), mode 0600 in a private folder. Each end checks the other is the same user.
 - Newline-delimited JSON, protocol version 2, a `hello` first; messages are capped at 4 MiB. Requests: `ping`, `status`, `unlock`, `unlock_touchid`, `encrypt`, `decrypt`, `wrap_key` (for Touch ID and the recovery key), `touch` (from `sesh ui`, so the idle timer doesn't run out while it's used), `lock`, `stop`. Every `encrypt` and `decrypt` names the vault's unlock id, so one vault's key never serves another.
 - It refuses to start unless it can turn off core dumps, refuse debuggers (`PT_DENY_ATTACH` on macOS, `PR_SET_DUMPABLE=0` on Linux), and keep the key in a memory page locked into RAM.
-- It locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks; once it has locked by itself it exits: at once when its own 15-second check finds the lock, otherwise (a lock found as a command arrives, or a screen lock) if nothing unlocks it within the idle timeout. Commands start it as needed, and one from another sesh build is replaced.
+- It locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks; once it has locked by itself it exits: at once when its timers, or its 15-second clock check, lock it; otherwise (a lock found as a command arrives, or a screen lock) if nothing unlocks it within the idle timeout. One never unlocked exits after one idle timeout. Locking on sleep and on screen lock are settings (`agent.lock_on_sleep`, `agent.lock_on_screen_lock`), on by default. Commands start it as needed, and one from another sesh build is replaced.
 
 See [SECURITY_MODEL.md](SECURITY_MODEL.md#sesh-agent) for what it protects against, and what it doesn't.
 
@@ -209,7 +211,7 @@ The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` 
 - `trash` (deleted entries, with their tags, kept for `trash.keep_days`) and `history` (earlier secrets, kept for `history.keep`; those of an entry in the trash go with it);
 - `vault_key`, the one row an unlock reads before any entry;
 - `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
-- `audit_log`, which names entries by their ID's text, with no foreign key, so the log survives an entry's deletion;
+- `audit_log`, which names entries by their ID's text (a deletion for good taken from sync names it by its sync uid), with no foreign key, so the log survives an entry's deletion;
 - what syncing keeps: `sync_state`, `sync_info`, `sync_typed`, `sync_typed_check`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
 - `schema_migrations`.
 
@@ -322,8 +324,8 @@ Syncing between computers is three parts, from the bottom up:
 
 - **`internal/syncfolder`: the folder.**
   - `sesh-sync.json` (`Info`): the folder's ID, the vault's key record, the links of master password changes (`KeyLink`: the old key sealed with the new, and a proof made with the old) and the shared recovery key's record (`SealedRecovery`).
-  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent or unlocked in that command) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
-  - A `Record` carries everything sync moves: the entry's name, secret, notes, fields, folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
+  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent or unlocked in that command) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last. A file may be at most 64 MiB: for an entry whose file would be larger, the oldest earlier secrets are left out of the folder until it fits (this computer keeps them).
+  - A `Record` carries everything sync moves: the entry's name, secret, URL, notes, fields, settings (TOTP code settings, the AWS MFA device, a file's name), folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
   - `Merge` and `MergeWith` merge two records field by field against the one both came from (or none), the same whichever side is "ours".
   - `Scan` lists the folder: entry files (sync tools' conflict copies included, told apart by the uid inside, not the name), files iCloud hasn't downloaded, and files that can't be read. Every file is written whole (`atomicfile`).
 - **`internal/vaultsync`: the engine.** `SyncWith` syncs a store with a folder.
@@ -354,11 +356,11 @@ Syncing between computers is three parts, from the bottom up:
 
 **Dual Code Generation with Params**
 ```go
-// Standard generation (6 digits, 30s, SHA1)
-currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
+// sesh code, copy and get: the entry's stored algorithm, digits and period
+currentCode, nextCode, err := totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 
-// Non-standard generation (respects stored algorithm, digits, period)
-currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
+// the AWS provider's MFA code (6 digits, 30s, SHA1)
+currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
 ```
 Generates both current and next codes to handle the transition between TOTP windows. When a TOTP entry is added from an `otpauth://` link or QR code, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. sesh reads these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
@@ -398,7 +400,7 @@ AWS and TOTP follow different flows because AWS requires a network round-trip to
 
 ### AWS Authentication Flow
 
-A profile that signs in with `aws login` or SSO (told by `login_session`, `sso_session` or `sso_start_url` in the AWS CLI's config, which `ProfileKind` reads itself; or, as `SignInKind` adds, by the AWS CLI saying the profile has no credentials at all, asked with `aws configure export-credentials` with its output thrown away: `aws login` sets such a profile up) takes another path, in `aws_login.go`: if the profile's session doesn't work, sesh runs the AWS CLI's sign-in, offering the MFA code it holds on the clipboard meanwhile, then opens the shell with `AWS_PROFILE` set and no credentials in variables, for the AWS CLI to keep fresh. The flow below is for profiles with an IAM user's access keys.
+A profile that signs in with `aws login` or SSO (told by `login_session`, `sso_session` or `sso_start_url` in the AWS CLI's config, which `ProfileKind` reads itself; or, as `SignInKind` adds, by the AWS CLI saying the profile has no credentials at all, asked with `aws configure export-credentials` with its output thrown away: `aws login` sets such a profile up) takes another path, in `aws_login.go`: if the profile's session doesn't work, sesh runs the AWS CLI's sign-in, offering the MFA code it holds on the clipboard meanwhile, then opens the shell with `AWS_PROFILE` set and no credentials in variables, for the AWS CLI to keep fresh. A profile that assumes a role (`role_arn`) is refused, pointing at `--clip`: the AWS CLI asks for its MFA code itself. The flow below is for profiles with an IAM user's access keys.
 
 The mode decision happens in `sesh aws` *before* credential generation. Subshell and clipboard modes follow different code paths:
 
@@ -406,7 +408,7 @@ The mode decision happens in `sesh aws` *before* credential generation. Subshell
 User ──► CLI ──► ValidateRequest
                       │
                       ├── Vault: look up the profile's entry
-                      └── Check its code settings; warn if no MFA device
+                      └── Check its code settings
                       │
                 ┌─────┴──────┐
                 ▼            ▼
@@ -483,7 +485,7 @@ Each layer provides independent security measures:
 
 4. **Session Security**
    - **Threat**: Credential leakage between sessions
-   - **Defense**: Credentials only in the shell `sesh aws` starts, gone from it when it exits
+   - **Defense**: Credentials only in the shell `sesh aws` starts, gone from it when it exits (`--no-subshell` prints them for your own shell instead)
    - **User Benefit**: Clear security boundaries
 
 5. **Access Security**
@@ -508,9 +510,16 @@ Additional trust boundaries:
    sesh → [TRUST BOUNDARY] → Agent socket (any process of yours can ask an unlocked agent to decrypt)
    agent → [TRUST BOUNDARY] → Secure Enclave (Touch ID unlock)
    sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures, backups,
-                             sesh inject's output, --editor temp files, sesh run's file copies)
-   sesh → [TRUST BOUNDARY] → Child processes (sesh run's environment; git, through the credential helper)
+                             sesh inject's output, --editor temp files, sesh run's file copies,
+                             plain exports, which hold secrets unencrypted)
+   sesh → [TRUST BOUNDARY] → Sync folder (entry files, sealed with the vault's key, and sesh-sync.json: the
+                             key record and folder ID, with its key links and recovery key sealed;
+                             carried by a sync tool you choose)
+   sesh → [TRUST BOUNDARY] → Child processes (sesh run's environment)
+   git  → [TRUST BOUNDARY] → sesh git-credential (git starts it; it answers on stdout)
    sesh → [TRUST BOUNDARY] → Browser (sesh open, http and https only)
+   sesh → [TRUST BOUNDARY] → Browser extension (sesh browser-host, started by the browser for
+                             sesh's extension only; one login per request, for the tab's site)
    sesh → [TRUST BOUNDARY] → Clipboard (pbcopy; wl-copy, xclip or xsel on Linux — visible to clipboard
                              managers; cleared after clipboard_timeout, 30s by default)
 ```
@@ -543,11 +552,11 @@ It's listed in `subcommands` (completion and the dispatcher read that), run from
 
 ### Capability Evolution
 
-Optional interfaces, discovered at run time by type assertion: `SubshellProvider`, which `LaunchSubshell` looks for, and `QuietProvider` and `ClipChecker`, which `app.go` looks for. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
+An optional interface, discovered at run time by type assertion: `SubshellProvider`, which `LaunchSubshell` looks for. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
 
 ```go
 type SubshellProvider interface {
-    NewSubshellConfig(creds *Credentials) interface{}
+    NewSubshellConfig(creds *Credentials) any
 }
 ```
 
@@ -557,7 +566,7 @@ type SubshellProvider interface {
 
 1. **Context Over Codes**: Users need to know *what went wrong* and *how to fix it*
 2. **Wrap Don't Replace**: Preserve error chains for debugging
-3. **User-Friendly Top Layer**: Technical details in logs, actionable messages to users
+3. **User-Friendly Top Layer**: actionable messages to users, with the underlying error kept in the chain
 
 ### Error Flow Architecture
 
@@ -638,7 +647,8 @@ The dominant cost in any sesh invocation is unlocking the vault (deriving the ke
 
 ```
 sesh/
-├── sesh/cmd/sesh/         # Command layer: one file per command or group
+├── sesh/cmd/sesh/         # Command layer: one file per command or group (browser_host.go: the
+│                          #   program the browser extension talks to)
 ├── internal/              # Core implementation
 │   ├── password/          # Listing, search, sesh's export and import, generation, strength
 │   ├── tui/               # sesh ui
@@ -658,7 +668,8 @@ sesh/
 │   ├── recovery/          # The recovery key
 │   ├── backup/            # Automatic and manual backups, next to the vault
 │   ├── screenlock/        # Whether the Mac's screen is locked
-│   ├── importer/          # Other apps' exports: bitwarden, browser, gauth, keepass, seshexport
+│   ├── importer/          # Other apps' exports: bitwarden, browser, gauth, keepass, lpauth, seshexport
+│   ├── sitematch/         # Whether an entry's URL is a page's site, for the browser extension
 │   ├── secretref/         # sesh://<id>[#field] references, for run and inject
 │   ├── mask/              # Hiding secrets in sesh run's output
 │   ├── health/            # The password health report
@@ -677,7 +688,7 @@ sesh/
 
 **Security Engineers:**
 - Defined trust boundaries
-- Explicit secret flow paths (vault → command → output, clipboard, or subshell) — no implicit or hidden data paths
+- Explicit secret flow paths (vault → command → output, clipboard, subshell, or the browser extension); the vault is also copied by automatic backups and, when on, sync, both encrypted
 - Layered security implementation
 - An audit log of every secret copied, printed or revealed, every change and delete (`sesh audit`); codes drawn in `sesh ui`'s list aren't recorded
 

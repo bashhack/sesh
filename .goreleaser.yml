@@ -37,8 +37,8 @@ builds:
 # The macOS binaries are signed with a Developer ID certificate and
 # notarized by Apple, so Gatekeeper lets a downloaded one run. It's on once
 # the certificate is given (isEnvSet counts "" as unset, which is what
-# GitHub passes for a secret that isn't); the release job refuses some of
-# the five secrets without the rest.
+# GitHub passes for a secret that isn't), so a local snapshot (make release)
+# builds unsigned; the release job refuses to run without all five secrets.
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
@@ -89,7 +89,8 @@ brews:
       sesh aws needs the AWS CLI (brew install awscli); nothing else does.
       Shell completion is installed for bash, zsh and fish; your shell's
       completion has to be turned on to use it: https://docs.brew.sh/Shell-Completion
-      sesh's browser extension needs one step, run once: sesh browser install
+      sesh's browser extension (github.com/bashhack/sesh-browser, loaded by hand)
+      needs one step, run once: sesh browser install
 checksum:
   name_template: 'checksums.txt'
 

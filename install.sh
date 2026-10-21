@@ -30,24 +30,31 @@ echo "📋 Installing to $INSTALL_DIR (standard user location)"
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   SHELL_RC=""
   if [[ "$SHELL" == */zsh ]]; then
-    SHELL_RC="$HOME/.zshrc"
+    SHELL_RC="${ZDOTDIR:-$HOME}/.zshrc"
   elif [[ "$SHELL" == */bash ]]; then
     SHELL_RC="$HOME/.bashrc"
   fi
 
   if [ -n "$SHELL_RC" ]; then
     if grep -q '/.local/bin' "$SHELL_RC" 2>/dev/null; then
-      echo "ℹ️ ~/.local/bin is already in $(basename "$SHELL_RC") — open a new terminal to pick it up"
+      echo "ℹ️ ~/.local/bin is already in $SHELL_RC — open a new terminal to pick it up"
     else
-      printf "⚠️ ~/.local/bin is not in your PATH. Add it to %s? [Y/n] " "$(basename "$SHELL_RC")"
-      REPLY=""
-      read -r REPLY 2>/dev/null || true
+      # The answer comes from the terminal, not stdin: run as curl … | bash,
+      # stdin is the script itself. With no terminal, the file is left alone.
+      REPLY=n
+      if { exec 3</dev/tty; } 2>/dev/null; then
+        printf "⚠️ ~/.local/bin is not in your PATH. Add it to %s? [Y/n] " "$SHELL_RC"
+        read -r REPLY <&3 || true
+        exec 3<&-
+      else
+        echo "⚠️ ~/.local/bin is not in your PATH."
+      fi
       if [[ "$REPLY" =~ ^[Nn]$ ]]; then
         echo "   To add it manually:"
         echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
       else
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-        echo "✅ Added ~/.local/bin to PATH in $(basename "$SHELL_RC")"
+        echo "✅ Added ~/.local/bin to PATH in $SHELL_RC"
         echo "   Run 'source $SHELL_RC' or open a new terminal to use sesh"
       fi
     fi
@@ -77,24 +84,26 @@ if ! curl -sfL -o "$TMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   exit 1
 fi
 
-# Verify checksum if checksums.txt is available
-if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
-  EXPECTED=$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
-  if [ -z "$EXPECTED" ]; then
-    echo "❌ Checksum entry for ${ARCHIVE} not found in checksums.txt"
-    exit 1
-  fi
-  if command -v sha256sum &>/dev/null; then
-    ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
-  else
-    ACTUAL=$(shasum -a 256 "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
-  fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
-    exit 1
-  fi
-  echo "✅ Checksum verified"
+# Every release has checksums.txt: the archive is checked against it.
+if ! curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
+  echo "❌ Couldn't download checksums.txt to check the archive against: $CHECKSUMS_URL"
+  exit 1
 fi
+EXPECTED=$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+if [ -z "$EXPECTED" ]; then
+  echo "❌ Checksum entry for ${ARCHIVE} not found in checksums.txt"
+  exit 1
+fi
+if command -v sha256sum &>/dev/null; then
+  ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+else
+  ACTUAL=$(shasum -a 256 "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+fi
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
+  exit 1
+fi
+echo "✅ Checksum verified"
 
 case "$ARCHIVE" in
   *.zip) unzip -q "$TMP_DIR/$ARCHIVE" -d "$TMP_DIR" ;;

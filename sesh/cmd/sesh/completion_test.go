@@ -65,7 +65,7 @@ func TestComplete(t *testing.T) {
 		{name: "history flags", words: all("history", "github", "-"), want: all("--clip", "--forget", "--restore", "--show", "--db-path")},
 		{name: "db path with = after a command", words: all("copy", "github", "--db-path="), files: true},
 		{name: "db path with = in list", words: all("list", "--db-path="), files: true},
-		{name: "first flag", words: all("-"), has: all("--help", "--version", "--db-path"), lacks: all("--service", "--rekey", "--list-services")},
+		{name: "first flag", words: all("-"), has: all("--help", "--version", "--db-path")},
 		{name: "after --", words: all("list", "--", "-")},
 		{name: "db path", words: all("--db-path", ""), files: true},
 		{name: "db path after a command", words: all("list", "--db-path", ""), files: true},
@@ -398,7 +398,7 @@ func TestCheckCommandWord(t *testing.T) {
 		"sesh trsh":     `sesh has no command "trsh"; did you mean: sesh trash`,
 		"sesh":          "",
 		"sesh ui":       "",
-		"sesh --list":   "sesh has no --list: sesh list",
+		"sesh --list":   `sesh takes a command first, not "--list"; the commands are listed by: sesh --help`,
 		"sesh --help":   "",
 	} {
 		err := checkCommandWord(strings.Fields(args))

@@ -83,6 +83,18 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	}
 }
 
+// A value longer than the values' column keeps two spaces before where it comes from.
+func TestRunConfig_LongValue(t *testing.T) {
+	useConfigFile(t, "[sync]\nname = \"a-computer-named-at-length\"\n")
+	app := agentTestApp()
+	if err := runConfig(app, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "sync.name                  a-computer-named-at-length  (config file)\n") {
+		t.Errorf("output:\n%s", got)
+	}
+}
+
 func TestRunConfig_NoFile(t *testing.T) {
 	path := useConfigFile(t, "")
 	app := agentTestApp()

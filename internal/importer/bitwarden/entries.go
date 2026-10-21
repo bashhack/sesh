@@ -167,7 +167,7 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 		addCustom(&fs, it.Fields)
 		return []*importer.Entry{importer.NoteEntry(base, service, note, &fs)}
 	case TypeBankAccount, TypeDriversLicense, TypePassport:
-		base.Skip = fmt.Sprintf("a %s, which sesh can't import yet: no Bitwarden export of one has been available to test against", typeName(it.Type))
+		base.Skip = fmt.Sprintf("a %s, which sesh doesn't import", typeName(it.Type))
 		return []*importer.Entry{base}
 	default:
 		base.Skip = fmt.Sprintf("an item of a kind sesh doesn't know (type %d)", it.Type)

@@ -15,6 +15,10 @@
 
 > A developer-friendly CLI that brings AWS MFA, TOTP authentication, and secure password management to your terminal, backed by an encrypted vault.
 
+<p align="center">
+  <img src="./docs/assets/sesh-ui.png" alt="sesh ui: folders and tags on the left, the entries in the middle, the selected entry's details on the right" width="900">
+</p>
+
 ## Purpose
 
 I was tired of relying on browser extensions or native desktop apps from corporate vendors—tools that often feel like security theater while quietly harvesting data. I needed something lightweight, security-conscious, and that respects user privacy.
@@ -26,15 +30,15 @@ In particular, I wanted fast, secure MFA support directly in the terminal—both
 - Web-based MFA flows where a TOTP secret is available
 - Secure storage for passwords, API keys, notes and files
 
-While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
+While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no bloat. Your security, your control, your terminal.
 
 ## Features
 
 - **Terminal App** — `sesh ui`: search every entry as you type, copy with Enter, and edit, file, and look after the vault, in one screen
-- **Encrypted Vault** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
+- **Encrypted Vault** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: your first `sesh add` creates it
 - **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle, after 8 hours, when the computer sleeps or (on macOS) its screen locks, and when you quit `sesh ui`, and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
-- **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
+- **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key; the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Sync Between Computers** — Each computer keeps its own vault; a sync folder that any tool carries (iCloud Drive, Dropbox, Syncthing, a USB stick) holds one encrypted file per entry. Commands and `sesh ui` sync on their own, an entry changed on two computers is merged field by field, the older change's password kept in its history, and a master password change or the recovery key reaches every computer ([Syncing between computers](docs/USAGE_AND_CONFIGURATION.md#syncing-between-computers-sesh-sync))
 - **Automatic Backups** — A copy of the encrypted vault each day, the newest 7 kept (`sesh backup`, `sesh restore`)
@@ -45,13 +49,14 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Health and Checks** — `sesh health` finds weak, reused and old passwords; `sesh doctor` checks the setup and that every entry can be read
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, secure notes, and files kept whole (a kubeconfig, a TLS key), each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
+- **Browser Extension** — `sesh browser install` connects [sesh-browser](https://github.com/bashhack/sesh-browser), which fills a site's login from the vault in Chrome and Firefox; it holds no vault, and isn't in the browsers' stores: load it by hand, as its README says ([The browser extension](docs/USAGE_AND_CONFIGURATION.md#the-browser-extension-sesh-browser))
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
 - **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets (configurable: `clipboard_timeout`)
 - **AWS Sign-in Shell** — `sesh aws` opens a shell with the session's credentials and helper commands; they leave with the shell when it exits
 - **QR Codes** — Set up TOTP by selecting the QR code on screen (macOS) or from a screenshot or photo (`--qr-image`); move a key to your phone with `sesh show --qr`
-- **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate` does when storing a password
+- **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate --words 6` does when storing a password
 - **AWS Profiles and Several Accounts** — `sesh aws --profile production`; several accounts on one site, told apart by username
 - **Audit Logging** — Every secret read (except the TOTP codes `sesh ui` draws), change and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 
@@ -65,11 +70,16 @@ brew install bashhack/sesh/sesh
 # Note: Homebrew adds sesh to your PATH, and installs its shell completion
 # for bash, zsh and fish (turn on Homebrew's completion to use it)
 
-# Option 2: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
+# Option 2: The install script: downloads the latest release for this
+# computer, checks it against the release's checksums, and installs it
+# to ~/.local/bin (for a given version: ... | bash -s -- v0.1.0)
+curl -fsSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
+
+# Option 3: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
 # for x86_64 or arm64
 # Visit: https://github.com/bashhack/sesh/releases
 
-# Option 3: Build from source (requires Go 1.27+). `go install …@latest`
+# Option 4: Build from source (requires Go 1.27+). `go install …@latest`
 # doesn't work: sesh's go.mod replaces two modules with forks.
 git clone https://github.com/bashhack/sesh && cd sesh
 go build -o ~/go/bin/sesh ./sesh/cmd/sesh   # ~/go/bin needs to be in your PATH
@@ -77,20 +87,55 @@ go build -o ~/go/bin/sesh ./sesh/cmd/sesh   # ~/go/bin needs to be in your PATH
 
 ## Quick Start
 
+```bash
+sesh add password github --username alice   # your first entry creates the vault
+sesh ui                                     # then the whole vault is one screen away
+```
+
+The first entry creates your vault: sesh says where, and asks for a master
+password, twice. A background agent then keeps it unlocked for a while, so
+nothing asks again until it locks itself. To bring everything over from
+another app instead, start with [`sesh import`](#bringing-entries-over-and-taking-them-out).
+
+### `sesh ui`: the whole vault in one screen
+
+`sesh ui` is the easiest way to use sesh day to day.
+
+<p align="center">
+  <img src="./docs/assets/sesh-ui-search.png" alt="sesh ui searching for aws: the matching entries, and the selected TOTP entry's code shown large with its countdown" width="900">
+</p>
+
+- **Type to search** names, usernames and sites. **Enter** copies the password,
+  or the current TOTP code, shown large with the seconds it has left; the
+  clipboard clears itself. **Ctrl-Y** copies the username, and **Tab** reveals
+  a hidden value.
+- **Ctrl-K** acts on the selected entry: edit it, copy any of its fields, open
+  its URL, go back to an earlier secret, or move it to the trash. **↓**, then
+  **Space**, marks several, to file, tag or trash them together.
+- **Ctrl-G** does everything else: add an entry or generate a password,
+  folders and tags, the trash, backups, import and export, AWS MFA setup and
+  sign-in, the health report, and settings: the master password, the recovery
+  key, Touch ID, sync, `sesh doctor`'s checks, the audit log, and every
+  setting.
+- **?**, with nothing typed, lists every key. In a window at least 110 columns
+  wide, folders and tags sit on the left.
+
+<p align="center">
+  <img src="./docs/assets/sesh-ui-menu.png" alt="sesh ui's menu: add an entry, generate a password, folders and tags, the trash, backups, import and export, AWS setup and sign-in, health report, settings, lock" width="900">
+</p>
+
+### From the command line
+
+Everything in `sesh ui` is also a command, for scripts and quick one-offs.
 Type `sesh` for every command, or `sesh <command> --help` for one.
 
 ```bash
-sesh add password github --username alice   # type it (hidden), or pipe it in
 sesh add password shop --generate           # a strong one, copied as it's saved
 sesh add totp github --qr                   # select the QR code on screen
 sesh copy github password                   # its password
 sesh copy github totp                       # its TOTP code
-sesh ui                                     # search everything; Enter copies
+sesh aws                                    # sign in to AWS with your MFA code
 ```
-
-The first command creates your vault: it says where, and asks for a master
-password, twice. A background agent then keeps it unlocked for a while, so
-later commands don't ask again until it locks itself.
 
 ### Prerequisites
 

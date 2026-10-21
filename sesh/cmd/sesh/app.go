@@ -148,12 +148,8 @@ func (a *App) GenerateCredentials(p provider.ServiceProvider) error {
 		return err
 	}
 
-	quiet := isQuietProvider(p)
-
-	if !quiet {
-		if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
-			return fmt.Errorf("failed to write to stderr: %w", err)
-		}
+	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
 	}
 	startTime := time.Now()
 
@@ -162,21 +158,12 @@ func (a *App) GenerateCredentials(p provider.ServiceProvider) error {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
 
-	if !quiet {
-		elapsedTime := time.Since(startTime)
-		if _, err := fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds()); err != nil {
-			return fmt.Errorf("failed to write to stderr: %w", err)
-		}
+	elapsedTime := time.Since(startTime)
+	if _, err := fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds()); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
 	}
 
 	return a.PrintCredentials(&creds)
-}
-
-// isQuietProvider reports whether p opts out of the generic action
-// framing. Non-opting-in providers default to false.
-func isQuietProvider(p provider.ServiceProvider) bool {
-	qp, ok := p.(provider.QuietProvider)
-	return ok && qp.SuppressActionFraming()
 }
 
 // insteadOfClip says how to get the value without a clipboard: --show,
@@ -198,11 +185,6 @@ func (a *App) CopyToClipboard(p provider.ServiceProvider) error {
 		return err
 	}
 
-	if cc, ok := p.(provider.ClipChecker); ok {
-		if err := cc.CheckClip(); err != nil {
-			return err
-		}
-	}
 	if a.ClipboardCheck != nil {
 		if err := a.ClipboardCheck(); err != nil {
 			if errors.Is(err, clipboard.ErrNoDisplay) {
@@ -212,12 +194,8 @@ func (a *App) CopyToClipboard(p provider.ServiceProvider) error {
 		}
 	}
 
-	quiet := isQuietProvider(p)
-
-	if !quiet {
-		if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
-			return fmt.Errorf("failed to write to stderr: %w", err)
-		}
+	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
 	}
 	startTime := time.Now()
 

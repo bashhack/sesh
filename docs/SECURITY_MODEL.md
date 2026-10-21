@@ -6,7 +6,7 @@ This document describes the security architecture and privacy principles that gu
 
 sesh is built on three fundamental principles:
 
-1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, the terminal (`sesh get`, `sesh show --reveal`), a command (`sesh run`), a file (`sesh inject`, `sesh get -o`, a plain export), or git (`sesh git-credential`), which sends it to the site. For AWS, only the MFA code goes out, through the AWS CLI
+1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, the terminal (`sesh get`, `sesh show --reveal`), a command (`sesh run`), a file (`sesh inject`, `sesh get -o`, a plain export), git (`sesh git-credential`), which sends it to the site, or the [browser extension](#the-browser-extension), which fills it in on the site. For AWS, only the MFA code goes out, through the AWS CLI
 2. **Encryption at Rest**: every secret is encrypted with AES-256-GCM, under a key made from your master password with Argon2id, and each entry under a key of its own made from that one
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
@@ -14,11 +14,11 @@ sesh is built on three fundamental principles:
 
 sesh is designed to reduce exposure to:
 
-- **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
+- **Corporate Data Harvesting**: Unlike cloud password managers or corporate MFA apps, sesh never phones home
 - **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the vault's optional recovery key record and the optional Touch ID file, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: `sesh aws` puts AWS credentials only in the shell it starts, not in your own, unless `--no-subshell` asks it to print them for your own shell
-- **Supply Chain Attacks**: a small set of dependencies, each pinned by its checksum (`go.sum`), and no code loaded at run time
+- **Supply Chain Attacks**: dependencies pinned by their checksums (`go.sum`), two of them forks named in `go.mod`'s `replace`, and no code loaded at run time
 
 sesh is NOT designed to protect against:
 
@@ -43,7 +43,7 @@ The vault provides application-level encryption on top of file-system storage:
 
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
-- **Bound to its entry**: each secret is encrypted with its entry's key (kind, service name, username) as AES-GCM associated data, so a secret copied into another entry's row by someone who can write the vault file fails to decrypt there instead of being read as that entry. The binding covers the secret only: someone who can write the file can still change an entry's settings (TOTP code settings, the AWS MFA device) or its times, or put back an older encrypted copy of the same entry's secret
+- **Bound to its entry**: each secret is encrypted with its entry's key (kind, service name, username) as AES-GCM associated data, so a secret copied into another entry's row by someone who can write the vault file fails to decrypt there instead of being read as that entry. The binding covers the secret only: someone who can write the file can still change an entry's settings (TOTP code settings, the AWS MFA device), its times, or its URL, which decides which site `sesh git-credential` and the browser extension give its password to, or put back an older encrypted copy of the same entry's secret
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit master key (made from your master password, below), *not* the password itself, so these settings keep each entry's key separate rather than slow down guessing, which the master password's own settings do once. They fall below OWASP's password-KDF minimums by design
 - **One file**: what the master password is turned into the key with (below) is stored in the vault file itself, so a copy of the vault file holds everything the master password needs to open it. A vault that holds entries but has lost that record is refused, rather than given a new key that couldn't read them
 - **Search**: matches service names, usernames and URL hosts, which are stored unencrypted; it never decrypts a secret
@@ -110,7 +110,7 @@ sesh derives the master key from your master password via Argon2id, the same way
 With Touch ID unlock on, the agent can unlock with a fingerprint instead of the master password.
 
 - **Key custody.** A P-256 key is created inside the Secure Enclave with access control `privateKeyUsage | biometryCurrentSet`. The private key never leaves the chip. Only a currently enrolled fingerprint can use it, and adding or removing a fingerprint invalidates it permanently. The key is not stored in the Keychain: sesh keeps its chip-bound handle (useless on any other Mac) in `touchid.key` next to the vault, mode 0600.
-- **The wrap.** The agent wraps the vault key to the Secure Enclave public key: one-off P-256 ECDH, HKDF-SHA256, then AES-256-GCM bound to the vault's unlock id. The vault key never leaves the agent to do this. Unwrapping needs the chip to do the ECDH, which shows the system Touch ID sheet ("sesh is trying to unlock your vault"). The agent checks the unwrapped key against the vault's verify blob before installing it, exactly as for a password.
+- **The wrap.** The agent wraps the vault key to the Secure Enclave public key: one-off P-256 ECDH, HKDF-SHA256, then AES-256-GCM bound to the vault's key record (by a hash of its verify blob). The vault key never leaves the agent to do this. Unwrapping needs the chip to do the ECDH, which shows the system Touch ID sheet ("sesh is trying to unlock your vault"). The agent checks the unwrapped key against the vault's verify blob before installing it, exactly as for a password.
 - **What changes.** The vault then opens with the master password **or** an enrolled fingerprint on that Mac. The master password is still needed to turn Touch ID unlock on, after fingerprint changes, over SSH, and as the fallback. It's never stored.
 - **Fingerprint only, deliberately.** Neither the Mac's login password nor an Apple Watch can approve, so the vault's protection is never reduced to that of the login password.
 - **Same-user malware.** A process running as you can make the agent show the Touch ID sheet, but can't approve it. The sheet is system UI that names the program asking. While the agent is unlocked, such a process can already ask it to decrypt; Touch ID doesn't change that.
@@ -122,11 +122,11 @@ With Touch ID unlock on, the agent can unlock with a fingerprint instead of the 
 A recovery key lets someone who forgot the master password set a new one. There's no server, so there's no second check: **the recovery key plus the vault file opens the vault**. It's offered, not forced, for that reason.
 
 - **The key.** 128 random bits, written down by the user as 7 groups of 4 Crockford base32 characters (the last two a 10-bit checksum, so typos are caught as typos). sesh never stores it, and shows it once. It's saved only after the user types back its last group.
-- **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in the vault file (the `recovery` table), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's unlock id. The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key, in the same transaction that changes the password, so the two change together.
+- **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in the vault file (the `recovery` table), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's key record (by a hash of its verify blob). The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key, in the same transaction that changes the password, so the two change together.
 - **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (the change removes its record), and a new one is offered at once.
 - **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
 - **The record alone** reveals nothing: a public key and a wrap only the paper key opens.
-- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though, and sesh makes backups automatically (see Backups, below). If the paper key may have been seen, remove it, then change the master password (`sesh passwd`), which gives the vault a new key that no old wrap opens, and delete the backups made before: `recovery remove`, `recovery new` (replacing a key) and `sesh passwd` each offer to, at a terminal.
+- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`), once the change is folded into the file from its write-ahead log, which happens when the last sesh command with the vault open closes it. A backup made while the key was set still holds a wrap of the same vault key, though, and sesh makes backups automatically (see Backups, below). If the paper key may have been seen, remove it, then change the master password (`sesh passwd`), which gives the vault a new key that no old wrap opens, and delete the backups made before: `recovery remove`, `recovery new` (replacing a key) and `sesh passwd` each offer to, at a terminal.
 - **Across computers.** A vault that syncs shares one recovery key with the others through `sesh-sync.json`: its public key, sealed with the vault key (bound to the folder and the key record it's sealed with), with a count that goes up with each change, the record it replaced, and when and where it was made. Each computer wraps its own vault key to that public key, so the folder never holds a wrap.
   - **Without the vault key,** someone who can write to the folder can't add a key of their own, and can't bring back an older one: one with a lower count is written over, and of two made from the same earlier one, every computer keeps the same one (the key that sorts last), so putting the other back changes nothing. Counts are capped, so none can be made that stops counting on.
   - **With an earlier master password,** a record sealed with that password's key isn't taken by a computer on the new one. A computer that hasn't taken the change yet still trusts it, as it would the entries' files sealed with its key: until every computer has synced after a change, someone who knew the old password and can write the folder can feed them. When such a computer takes the change, a recovery key it took under the old password is dropped unless the folder's record under the new one is the same key, and it's never sent on, so it doesn't reach the others.
@@ -138,7 +138,7 @@ A recovery key lets someone who forgot the master password set a new one. There'
 
 The agent is a per-user background process (`sesh agent`). A run at a terminal that creates the vault starts it and unlocks it with the new password; after that, the first command that needs the key starts it if it isn't running. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
 
-- **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. Both ends check the other's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS): the agent rejects clients run by other users, and the CLI refuses an agent socket owned by another user before sending it anything
+- **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600, in a folder sesh makes 0700 (with `SESH_AUTH_SOCK`, use a folder only you can open). Both ends check the other's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS): the agent rejects clients run by other users, and the CLI refuses an agent socket owned by another user before sending it anything
 - **Unlock**: the CLI prompts, then sends the password and the vault's public salt, Argon2id settings, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time
 - **Vault binding**: every encrypt/decrypt request names the vault it was unlocked for (by its verify blob). If the agent has since been unlocked for a different vault, it refuses rather than use the wrong key
 - **Environment**: runs with `SESH_MASTER_PASSWORD` set never start or use the agent, and an agent started by another run does not inherit that variable
@@ -157,7 +157,7 @@ What this changes: while the agent is unlocked, **any process running as your us
 - **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt, or `sesh ui` saying it's in use. Status checks don't count.
 - **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
 - **Sleep** (`agent.lock_on_sleep`, on by default): the agent locks once the computer has slept, as it wakes (below).
-- **Screen lock** (`agent.lock_on_screen_lock`, on by default, macOS): the agent asks the login session whether its screen is locked every 2 seconds (CoreGraphics' session dictionary, `CGSSessionScreenIsLocked`) and locks as it locks. As it locks, not while it stays locked: every session of the user reaches the same agent, so one unlocked over SSH while the Mac's screen stays locked stays unlocked. An unlock under way as the screen locks doesn't install its key. Locked so, the agent stops if nothing unlocks it within the idle timeout, as after a late lock. An agent started outside a login session (over SSH) has no screen to ask about, and doesn't watch until it's next started.
+- **Screen lock** (`agent.lock_on_screen_lock`, on by default, macOS): the agent asks the login session whether its screen is locked every 2 seconds (CoreGraphics' session dictionary, `CGSSessionScreenIsLocked`) and locks as it locks. As it locks, not while it stays locked: every session of the user reaches the same agent, so one unlocked over SSH while the Mac's screen stays locked stays unlocked. An unlock under way as the screen locks doesn't install its key. Locked so, the agent stops if nothing unlocks it within the idle timeout, as when a command finds it past its timeouts. An agent started outside a login session (over SSH) has no screen to ask about, and doesn't watch until it's next started.
 - **Quitting sesh ui** (`ui.lock_on_quit`, on by default) locks it, as `sesh agent lock` does.
 - **On demand**: `sesh agent lock` drops the key, `sesh agent stop` shuts the agent down, and `SIGUSR1` locks it.
 
@@ -233,17 +233,17 @@ Go makes this hard, but sesh reduces exposure through several techniques:
 1. **Prefer Bytes Over Strings**
    ```go
    // Keep secrets as []byte throughout the pipeline
-   secretBytes, err := p.store.Get(key)
+   secretBytes, err := m.store.Get(key)
    defer secure.SecureZeroBytes(secretBytes)
    ```
 
-2. **Compiler-Protected Zeroing**
+2. **Zeroing Byte Slices**
    ```go
    func SecureZeroBytes(b []byte) {
        for i := range b {
            b[i] = 0
        }
-       runtime.KeepAlive(b)  // Prevent optimization
+       runtime.KeepAlive(b)  // keep b reachable until it's zeroed
    }
    ```
 
@@ -260,7 +260,7 @@ Go makes this hard, but sesh reduces exposure through several techniques:
 While we cannot achieve perfect security, our approach significantly reduces risk:
 
 - **Without Protection**: Secrets persist as strings across multiple allocations with no cleanup
-- **With sesh**: Secrets are kept as `[]byte` and zeroed after use, reducing the exposure window for memory dump attacks
+- **With sesh**: where it can, sesh keeps secrets as `[]byte` and zeroes them after use, reducing the exposure window for memory dump attacks; what goes to the clipboard, the browser extension, `sesh run`'s environment and the terminal are string copies Go can't wipe
 
 ## Profiles that sign in with `aws login` or SSO
 
@@ -275,21 +275,25 @@ The AWS subshell provides an isolated credential environment:
 ### Environment Isolation
 ```bash
 # Main shell - no AWS credentials
-$ env | grep AWS
+$ env | grep -E '^(AWS|SESH)_'
 (nothing)
 
-# sesh subshell - credentials isolated here
+# sesh subshell - credentials isolated here (a profile with access keys;
+# one that signs in with aws login or SSO gets AWS_PROFILE instead, when it's a named profile)
 $ sesh aws
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
-(sesh:aws) $ env | grep AWS
+(sesh:aws) $ env | grep -E '^(AWS|SESH)_'
 AWS_ACCESS_KEY_ID=ASIA...
 AWS_SECRET_ACCESS_KEY=...
 AWS_SESSION_TOKEN=...
 SESH_ACTIVE=1
+SESH_SERVICE=aws
+SESH_EXPIRY=...
+SESH_TOTAL_DURATION=...
 
 # Exit subshell - credentials gone
 $ exit
-$ env | grep AWS
+$ env | grep -E '^(AWS|SESH)_'
 (nothing)
 ```
 
@@ -326,7 +330,7 @@ Every command reads and writes the one vault, through the same store, under its 
 - **Audit Trail**: Every secret read (except the TOTP codes `sesh ui` draws), change, and deletion is logged
 - **Explicit User Control**: Nothing runs on its own except upkeep when a command unlocks the vault: the daily backup, removing audit events, trash and earlier secrets past their settings, and, in a vault that syncs, the sync (`sesh ui` syncs every 5 minutes too; `sync.auto` turns it off)
 - **Open Source**: Complete transparency in implementation
-- **Few Dependencies**: each pinned by its checksum (`go.sum`)
+- **Pinned Dependencies**: each pinned by its checksum (`go.sum`)
 
 ## Backups
 
@@ -358,6 +362,16 @@ Each computer keeps its own vault; a **sync folder**, which any tool carries bet
 - **Automatic sync** (`sync.auto`, on unless turned off) runs as the commands that use entries open and change the vault, and in `sesh ui` (at start, every 5 minutes, and after a change made in it). It asks for nothing: a master password changed on another computer isn't taken until `sesh sync` asks for it. It gives up on a folder that doesn't answer within 5 seconds.
 - **Not synced:** each computer's audit log, backups, Touch ID unlock, agent and config file (`config.toml`); and the oldest earlier secrets of an entry whose file would be over 64 MiB, which stay on the computer that has them.
 
+## The browser extension
+
+sesh's extension ([sesh-browser](https://github.com/bashhack/sesh-browser), for Chrome and Firefox) holds no vault and no key. It asks sesh, through the browser's native messaging, for one login at a time, and sesh decides what it gets:
+
+- **Who can ask:** `sesh browser install` registers `sesh browser-host` with each browser for the extension with sesh's ID: Chrome's, fixed by the public key in its manifest, and Firefox's add-on ID (`sesh@bashhack.github.io`). The browser starts it for no other extension, and never for a page. An ID isn't a secret, though: another extension could carry the same one, so install only sesh-browser's own. A program running as you could also run `sesh browser-host` itself, as it could run any sesh command.
+- **What it gets:** a list of the logins whose URL is the tab's site (the same scheme, host and port: an https login is never offered to an http page, nor `github.com`'s to `gist.github.com`), then, when you choose one, that one login's username, password and TOTP code. sesh checks the site against the entry again in the same read of the vault, so a login is never given to a page it doesn't match. Each read is recorded in the audit log, naming the site.
+- **When:** only when you open the extension on a tab and choose a login. The extension can reach only that tab (the browser's `activeTab`), never fills a frame from another site, and keeps nothing once it closes. A TOTP code you copy from it stays on the clipboard until something replaces it (the extension runs only while its popup is open, so it doesn't clear it later); the code itself is good only until its period ends.
+- **Unlocking:** never with the master password: the extension can't ask for it. When sesh is locked, it offers Touch ID if Touch ID unlock is on for this vault; otherwise a sesh command at the terminal unlocks it.
+- **Limits:** messages are capped (16 KiB in, 1 MiB out). A page with a login form can see what's filled into it, as with any password manager: that's why sesh checks the site first.
+
 ## Comparison with Alternatives
 
 ### vs Mobile Authenticator Apps
@@ -366,16 +380,16 @@ Each computer keeps its own vault; a **sync folder**, which any tool carries bet
 |---------|-------------|------|
 | Storage Location | Phone (unknown security) | Encrypted vault on your machine |
 | Backup/Sync | Often cloud-based | Automatic local backups of the encrypted vault; sync between your computers through a folder of encrypted files any tool carries; encrypted export for moving elsewhere |
-| Privacy | Varies (often poor) | Complete |
+| Privacy | Varies (often poor) | On your computers, and in a sync folder if you set one up; names, usernames, URLs, folders, tags and settings are readable in the vault file |
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | In the vault: a record for you, not tamper-proof |
 
-### vs Browser Extensions
+### vs Browser-Based Password Managers
 
-| Feature | Browser Extensions | sesh |
+| Feature | Browser-Based Managers | sesh |
 |---------|-------------------|------|
-| Attack Surface | Entire browser | Minimal CLI |
-| Permissions | Broad web access | Local only |
+| Where the vault is | In the extension, or a cloud account | A file on your machine; sesh's extension holds no vault |
+| Permissions | Often every site, all the time | sesh's extension: only the tab you open it on |
 | Updates | Auto/forced | User-controlled |
 | Code Visibility | Often obfuscated | Open source |
 
@@ -427,4 +441,4 @@ sesh provides a security model that prioritizes:
 3. **Transparency**: Honest about capabilities and limitations
 4. **User Control**: You own your authentication workflow
 
-While perfect security is impossible, sesh significantly improves upon mobile apps, browser extensions, and corporate MFA solutions by keeping your authentication local, private, and under your control.
+While perfect security is impossible, sesh significantly improves upon mobile apps, browser-based password managers, and corporate MFA solutions by keeping your authentication local, private, and under your control.
