@@ -48,8 +48,9 @@ another build is replaced), so the daily sesh would keep asking to unlock.
   there). In `sesh ui`: Enter and Ctrl-Y, the copy actions, the password
   generator, and saving a generated password. Read the code instead, or use
   `sesh get`.
-- **Don't run `sesh touchid enable`** unless asked: it makes a key in the
-  Mac's secure chip, tied to the person's fingerprints. And don't accept
+- **Don't run `sesh touchid enable` or `sesh browser install`** unless asked:
+  the first makes a key in the Mac's secure chip, tied to the person's
+  fingerprints; the second repoints their browsers (below). And don't accept
   `sesh sync init`'s offer of an iCloud Drive folder: iCloud copies it to the
   person's other computers.
 - Stop every agent and process you start (`scripts/sesh-dev agent stop`), and
@@ -72,7 +73,9 @@ another build is replaced), so the daily sesh would keep asking to unlock.
   and `XDG_CONFIG_HOME` point at the dev folder, so a `sesh` run there uses
   the dev vault, and other programs (git, an editor) look for their config in
   it. The other way round, a `scripts/sesh-dev aws` run inside the daily
-  sesh's AWS shell refuses ("already in a sesh environment").
+  sesh's AWS shell refuses ("already in a sesh environment"), except for a
+  profile that signs in with `aws login` or SSO whose session has ended: the
+  dev build signs it in again.
 - **`sesh init`:** it offers the default vault location, not the dev one;
   `scripts/sesh-dev init` gives it the dev vault's.
 
@@ -85,7 +88,7 @@ go build -o ~/go/bin/sesh ./sesh/cmd/sesh   # a folder on PATH after Homebrew's
 brew unlink sesh && hash -r                 # now `sesh` is the dev build
 ~/go/bin/sesh browser install               # the extension too, if needed
 # … and back:
-brew link sesh && hash -r
+rm ~/go/bin/sesh && brew link sesh && hash -r
 sesh browser install                        # the extension back to Homebrew's
 ```
 

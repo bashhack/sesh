@@ -27,7 +27,24 @@ case "$dir" in
 	;;
 esac
 
-if [ "${1:-}" = browser ]; then
+# The command: the first word after any --db-path the arguments start with.
+cmd="" skip=""
+for a in "$@"; do
+	if [ -n "$skip" ]; then
+		skip=""
+		continue
+	fi
+	case "$a" in
+	--db-path) skip=1 ;;
+	--db-path=*) ;;
+	*)
+		cmd=$a
+		break
+		;;
+	esac
+done
+
+if [ "$cmd" = browser ]; then
 	# The browser starts sesh by the path browser install writes, without
 	# this script's settings: it would run the dev build on the daily vault
 	# and agent.
@@ -50,7 +67,7 @@ export XDG_CONFIG_HOME="$dir/config"
 
 # sesh init offers the default vault location, not SESH_DB_PATH: given the
 # dev vault's, it doesn't ask.
-if [ "${1:-}" = init ] && [[ " $* " != *" --db-path"* ]]; then
+if [ "$cmd" = init ] && [[ " $* " != *" --db-path"* ]]; then
 	set -- "$@" --db-path "$SESH_DB_PATH"
 fi
 exec "$bin" "$@"
